@@ -123,8 +123,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Successfully converted %s to %s\n", srtFile, targetFile)
-	fmt.Printf("Settings: %dx%d resolution, %v fps\n", width, height, frameDuration)
+	fmt.Printf("%s --> %s\n", srtFile, targetFile)
+	fmt.Printf("Settings: %dx%dp %v fps\n", width, height, frameDuration)
 }
 
 func getPath(filePath string) (projectName, targetPath string) {
