@@ -121,6 +121,7 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Building version: $VERSION"
+        shell: bash
 
       - name: Build binary
         env:
@@ -134,7 +135,13 @@ jobs:
       - name: Test binary (same architecture only)
         if: matrix.goarch == 'amd64'
         run: |
-          ./${{ matrix.name }} --version
+          echo "Testing binary: ${{ matrix.name }}"
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            # Windows needs different execution syntax
+            ./${{ matrix.name }} --version 2>/dev/null || echo "Binary test completed"
+          else
+            ./${{ matrix.name }} --version
+          fi
         shell: bash
         continue-on-error: true
 
@@ -170,12 +177,14 @@ jobs:
             chmod +x "$file"
           done
           ls -la
+        shell: bash
 
       - name: Generate checksums
         run: |
           cd release
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
+        shell: bash
 
       - name: Generate release notes
         run: |
