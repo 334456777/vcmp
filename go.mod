@@ -1,11 +1,16 @@
 module srt2fcpxml
 
-go 1.12
+go 1.24.0
 
 require (
-	github.com/asticode/go-astisub v0.0.0-20190928084154-2a29469c64e4
-	github.com/asticode/go-astitools v1.2.0 // indirect
-	github.com/asticode/go-astits v1.0.0 // indirect
-	github.com/satori/go.uuid v1.2.0
-	golang.org/x/text v0.3.2 // indirect
+	github.com/asticode/go-astisub v0.35.0
+	github.com/google/uuid v1.6.0
+)
+
+require (
+	github.com/asticode/go-astikit v0.56.0 // indirect
+	github.com/asticode/go-astits v1.13.0 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	golang.org/x/net v0.44.0 // indirect
+	golang.org/x/text v0.29.0 // indirect
 )

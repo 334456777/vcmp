@@ -4,7 +4,7 @@ import (
 	"srt2fcpxml/core/FcpXML/Library/Event/Project/Sequence"
 	"time"
 
-	uuid "github.com/satori/go.uuid"
+	"github.com/google/uuid"
 )
 
 type Project struct {
@@ -19,7 +19,7 @@ func NewProject(projectName string) *Project {
 	modDate := time.Now().Format("2006-01-02 15:04:05 -0700")
 	return &Project{
 		Name:     projectName,
-		Uid:      uuid.NewV4().String(),
+		Uid:      uuid.New().String(),
 		ModDate:  modDate,
 		Sequence: &Sequence.Sequence{},
 	}

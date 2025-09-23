@@ -25,23 +25,42 @@ First you need to give the program execute permission `chmod +x ./srt2fcpxml`
 
 首先需要赋予程序执行权限 `chmod +x ./srt2fcpxml`
 
+The program will automatically find SRT files in the current directory and convert them.
+
+程序会自动在当前目录中查找SRT文件并进行转换。
+
+### Usage Patterns (使用模式)
+
 ```bash
+# Auto find SRT file with default settings (1920x1080@30fps)
+# 自动查找SRT文件并使用默认设置 (1920x1080@30帧)
 $ ./srt2fcpxml
-  -fd int
-    	Frame rate is currently supported (帧率目前支持) 23.98、24、25、29.97、30、50、59.94、60 (default 25)
-  -srt string
-    	srt Subtitle files (字幕文件)
-  -width int
-        width resolution default 1920 (分辨率宽 默认 1920)
-  -height int
-        high resolution default 1080 (分辨率高 默认 1080)       
+
+# Auto find SRT file with specified frame rate (1920x1080@60fps)
+# 自动查找SRT文件并使用指定帧率 (1920x1080@60帧)
+$ ./srt2fcpxml 60
+
+# Auto find SRT file with custom resolution and frame rate
+# 自动查找SRT文件并使用自定义分辨率和帧率
+$ ./srt2fcpxml 1920 1080 29.97
 ```
 
-## Execution (执行)
+### Supported Frame Rates (支持的帧率)
+23.98, 24, 25, 29.97, 30, 50, 59.94, 60
+
+## Execution Examples (执行示例)
 
 ```bash
-$ ./srt2fcpxml -srt /tmp/test.srt
-```
-he `fcpxml` file named with srt file name will be generated automatically in the directory of srt file.
+# Convert with default settings (默认设置转换)
+$ ./srt2fcpxml
 
-在 srt 文件的目录中会自动生成以srt文件名命名的`fcpxml`文件。
+# Convert with 60fps (60帧转换)
+$ ./srt2fcpxml 60
+
+# Convert with custom settings (自定义设置转换)
+$ ./srt2fcpxml 1920 1080 29.97
+```
+
+The `fcpxml` file named with srt file name will be generated automatically in the same directory as the srt file.
+
+会在srt文件所在目录中自动生成以srt文件名命名的`fcpxml`文件。

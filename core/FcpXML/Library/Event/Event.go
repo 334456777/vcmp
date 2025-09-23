@@ -4,7 +4,7 @@ import (
 	"srt2fcpxml/core/FcpXML/Library/Event/Project"
 	"time"
 
-	uuid "github.com/satori/go.uuid"
+	"github.com/google/uuid"
 )
 
 type Event struct {
@@ -17,7 +17,7 @@ type Event struct {
 func NewEvent() *Event {
 	return &Event{
 		Name:    time.Now().Format("2006-01-02"),
-		Uid:     uuid.NewV4().String(),
+		Uid:     uuid.New().String(),
 		Project: &Project.Project{},
 	}
 }
