@@ -89,12 +89,23 @@ go build -o srt2fcpxml cmd/main.go
    ```
 
 2. GitHub Actions will automatically:
-   - Run tests
-   - Build binaries for all platforms
-   - Create a release with all binaries
-   - Generate checksums
+   - ✅ Run tests on Ubuntu
+   - 🔨 Build binaries using native runners for better performance:
+     - **Windows** builds on `windows-latest`
+     - **macOS** builds on `macos-latest` 
+     - **Linux** builds on `ubuntu-latest`
+   - 🎯 Support for AMD64 and ARM64 architectures
+   - 📦 Create GitHub release with all binaries
+   - 🔐 Generate SHA256 checksums for security
+   - ✨ Test native binaries for quality assurance
+
+### Workflow Triggers (工作流触发条件)
+- **Tag push** (`v*`) → Full build + release
+- **Branch push** (main/master/develop) → Build only 
+- **Pull Request** → Test only
+- **Manual trigger** → Custom version build
 
 ### Manual Trigger (手动触发)
-You can also manually trigger builds through GitHub Actions interface.
+You can manually trigger builds through GitHub Actions interface with custom version numbers.
 
-你也可以通过GitHub Actions界面手动触发构建。
+你可以通过GitHub Actions界面手动触发构建并指定自定义版本号。

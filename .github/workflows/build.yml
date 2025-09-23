@@ -1,0 +1,231 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., v1.0.0)'
+        required: false
+        default: 'manual-build'
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Get dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Build test
+        run: go build -v ./cmd/main.go
+
+  build:
+    name: Build
+    needs: test
+    # 只在推送或手动触发时构建，跳过PR
+    if: github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        include:
+          # Windows builds on Windows runner
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            ext: .exe
+            name: srt2fcpxml-windows-amd64.exe
+          - os: windows-latest
+            goos: windows
+            goarch: arm64
+            ext: .exe
+            name: srt2fcpxml-windows-arm64.exe
+          
+          # macOS builds on macOS runner
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            ext: ''
+            name: srt2fcpxml-macos-intel
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            ext: ''
+            name: srt2fcpxml-macos-apple-silicon
+          
+          # Linux builds on Ubuntu runner
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            ext: ''
+            name: srt2fcpxml-linux-amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            ext: ''
+            name: srt2fcpxml-linux-arm64
+    
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Get dependencies
+        run: go mod download
+
+      - name: Display build info
+        run: |
+          echo "Building for: ${{ matrix.goos }}/${{ matrix.goarch }}"
+          echo "On runner: ${{ matrix.os }}"
+          echo "Output file: ${{ matrix.name }}"
+          go version
+        shell: bash
+
+      - name: Set version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="dev-${GITHUB_SHA::8}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w -X 'main.version=${{ steps.version.outputs.version }}'" -o "${{ matrix.name }}" ./cmd/main.go
+        shell: bash
+
+      - name: Test binary (same architecture only)
+        if: matrix.goarch == 'amd64'
+        run: |
+          ./${{ matrix.name }} --version
+        shell: bash
+        continue-on-error: true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: build
+    # 只在推送标签时创建发布
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          cd release
+          for file in *; do
+            chmod +x "$file"
+          done
+          ls -la
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Generate release notes
+        run: |
+          echo "## srt2fcpxml ${{ github.ref_name }}" > release_notes.md
+          echo "" >> release_notes.md
+          echo "Convert SRT subtitle files to Final Cut Pro XML format with flexible resolution and frame rate options." >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### ✨ New Features" >> release_notes.md
+          echo "- 🎯 Automatic SRT file detection in current directory" >> release_notes.md
+          echo "- ⚙️ Flexible command line arguments for resolution and frame rate" >> release_notes.md
+          echo "- 🎬 Support for multiple frame rates: 23.98, 24, 25, 29.97, 30, 50, 59.94, 60" >> release_notes.md
+          echo "- 📦 Updated dependencies to latest versions" >> release_notes.md
+          echo "- 🔄 Improved output format and error handling" >> release_notes.md
+          echo "- 📋 Version information support" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### 📖 Usage" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo "# Auto find SRT file with default settings (1920x1080@30fps)" >> release_notes.md
+          echo "./srt2fcpxml" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Use specific frame rate (1920x1080@60fps)" >> release_notes.md
+          echo "./srt2fcpxml 60" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Use custom resolution and frame rate" >> release_notes.md
+          echo "./srt2fcpxml 1920 1080 29.97" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Show version information" >> release_notes.md
+          echo "./srt2fcpxml --version" >> release_notes.md
+          echo '```' >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### 💻 Supported Platforms" >> release_notes.md
+          echo "- ✅ Windows (AMD64, ARM64)" >> release_notes.md
+          echo "- ✅ macOS (Intel, Apple Silicon)" >> release_notes.md
+          echo "- ✅ Linux (AMD64, ARM64)" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### 🚀 Installation" >> release_notes.md
+          echo "1. Download the appropriate binary for your platform" >> release_notes.md
+          echo "2. Make it executable: \`chmod +x srt2fcpxml-*\`" >> release_notes.md
+          echo "3. Run it in a directory containing SRT files" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### 🔐 Checksums" >> release_notes.md
+          echo "SHA256 checksums are provided in \`SHA256SUMS\` file for security verification." >> release_notes.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: srt2fcpxml ${{ github.ref_name }}
+          body_path: release_notes.md
+          files: release/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
