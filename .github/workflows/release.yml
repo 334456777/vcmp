@@ -1,0 +1,158 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # 触发条件：推送标签，例如 v1.0.0
+  workflow_dispatch:  # 允许手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Verify build
+        run: go build -v ./cmd/...
+
+  build:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      matrix:
+        include:
+          # Windows builds
+          - goos: windows
+            goarch: amd64
+            suffix: .exe
+            name: srt2fcpxml-windows-amd64.exe
+          - goos: windows
+            goarch: arm64
+            suffix: .exe
+            name: srt2fcpxml-windows-arm64.exe
+          
+          # macOS builds
+          - goos: darwin
+            goarch: amd64
+            suffix: ''
+            name: srt2fcpxml-macos-intel
+          - goos: darwin
+            goarch: arm64
+            suffix: ''
+            name: srt2fcpxml-macos-apple-silicon
+          
+          # Linux builds
+          - goos: linux
+            goarch: amd64
+            suffix: ''
+            name: srt2fcpxml-linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: ''
+            name: srt2fcpxml-linux-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w -X 'main.version=${{ github.ref_name }}'" -o ${{ matrix.name }} ./cmd/main.go
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: ./artifacts
+
+      - name: Organize artifacts
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Generate release notes
+        run: |
+          echo "## Changes in ${{ github.ref_name }}" > release_notes.md
+          echo "" >> release_notes.md
+          echo "### New Features" >> release_notes.md
+          echo "- Automatic SRT file detection in current directory" >> release_notes.md
+          echo "- Flexible command line arguments for resolution and frame rate" >> release_notes.md
+          echo "- Support for multiple frame rates: 23.98, 24, 25, 29.97, 30, 50, 59.94, 60" >> release_notes.md
+          echo "- Updated dependencies to latest versions" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### Usage Examples" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo "# Auto find SRT file with default settings (1920x1080@30fps)" >> release_notes.md
+          echo "./srt2fcpxml" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Use specific frame rate" >> release_notes.md
+          echo "./srt2fcpxml 60" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Use custom resolution and frame rate" >> release_notes.md
+          echo "./srt2fcpxml 1920 1080 29.97" >> release_notes.md
+          echo '```' >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### Supported Platforms" >> release_notes.md
+          echo "- Windows (AMD64, ARM64)" >> release_notes.md
+          echo "- macOS (Intel, Apple Silicon)" >> release_notes.md
+          echo "- Linux (AMD64, ARM64)" >> release_notes.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body_path: release_notes.md
+          files: release/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

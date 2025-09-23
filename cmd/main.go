@@ -11,8 +11,16 @@ import (
 	"github.com/asticode/go-astisub"
 )
 
+var version = "dev" // 将在构建时通过 ldflags 设置
+
 func main() {
 	args := os.Args[1:] // 获取除程序名外的所有参数
+
+	// 检查版本标志
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "-v") {
+		fmt.Printf("srt2fcpxml version %s\n", version)
+		os.Exit(0)
+	}
 
 	// 默认参数
 	var srtFile string
@@ -210,10 +218,14 @@ func parseFrameRate(frameRateStr string) (interface{}, error) {
 
 // printUsage 打印使用说明
 func printUsage() {
+	fmt.Printf("srt2fcpxml version %s\n", version)
+	fmt.Println("Convert SRT subtitle files to Final Cut Pro XML format")
+	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  ./srt2fcpxml                    - Auto find SRT file in current directory, use 1920x1080@30fps")
 	fmt.Println("  ./srt2fcpxml <framerate>        - Auto find SRT file, use specified framerate with 1920x1080")
 	fmt.Println("  ./srt2fcpxml <width> <height> <framerate> - Auto find SRT file, use specified resolution and framerate")
+	fmt.Println("  ./srt2fcpxml --version | -v     - Show version information")
 	fmt.Println("")
 	fmt.Println("Supported frame rates: 23.98, 24, 25, 29.97, 30, 50, 59.94, 60")
 	fmt.Println("")

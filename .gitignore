@@ -1,3 +1,17 @@
 .idea
-
 .DS_Store
+
+# Build artifacts
+build/
+srt2fcpxml
+srt2fcpxml.exe
+srt2fcpxml-*
+
+# Test files
+test.srt
+*.fcpxml
+
+# IDE
+.vscode/
+*.swp
+*.swo

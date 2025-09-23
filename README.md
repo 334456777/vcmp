@@ -16,9 +16,14 @@ Then execute `make` command in the project directory and generate `srt2fcpxml` e
 然后在项目目录下执行`make`命令后在`build`目录下生成`srt2fcpxml`执行文件。
 
 ## Download (下载)
-Users who do not want to compile can download the [executable file](https://github.com/GanymedeNil/srt2fcpxml/releases) directly.
+Users who do not want to compile can download the [executable file](https://github.com/334456777/srt2fcpxml/releases) directly.
 
-不想编译的用户可以直接下载[执行文件](https://github.com/GanymedeNil/srt2fcpxml/releases)。
+不想编译的用户可以直接下载[执行文件](https://github.com/334456777/srt2fcpxml/releases)。
+
+### Supported Platforms (支持平台)
+- Windows (AMD64, ARM64)
+- macOS (Intel, Apple Silicon) 
+- Linux (AMD64, ARM64)
 
 ## Use (使用)
 First you need to give the program execute permission `chmod +x ./srt2fcpxml`
@@ -64,3 +69,32 @@ $ ./srt2fcpxml 1920 1080 29.97
 The `fcpxml` file named with srt file name will be generated automatically in the same directory as the srt file.
 
 会在srt文件所在目录中自动生成以srt文件名命名的`fcpxml`文件。
+
+## Development (开发)
+
+### Local Build (本地构建)
+```bash
+# Build for current platform
+go build -o srt2fcpxml cmd/main.go
+
+# Build for all platforms using the build script
+./build.sh v1.0.0
+```
+
+### Release Process (发布流程)
+1. Create and push a version tag:
+   ```bash
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+
+2. GitHub Actions will automatically:
+   - Run tests
+   - Build binaries for all platforms
+   - Create a release with all binaries
+   - Generate checksums
+
+### Manual Trigger (手动触发)
+You can also manually trigger builds through GitHub Actions interface.
+
+你也可以通过GitHub Actions界面手动触发构建。
