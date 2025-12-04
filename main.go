@@ -4,12 +4,12 @@ import (
 	"compress/gzip"
 	"encoding/gob"
 	"encoding/xml"
-	"path/filepath"
 	"flag"
 	"fmt"
 	"image"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -440,13 +440,6 @@ func generateFCPXML(segments []StaticSegment, meta VideoMetadata, outputPath str
 		markers = append(markers, startMarker, stopMarker)
 	}
 
-	inputFileName := filepath.Base(meta.FilePath)
-	absPath, err := filepath.Abs(meta.FilePath)
-	if err != nil {
-		absPath = meta.FilePath
-	}
-	fileSrc := "file://" + absPath
-
 	fcpxml := FCPXML{
 		Version: "1.11",
 		Resources: Resources{
@@ -457,17 +450,6 @@ func generateFCPXML(segments []StaticSegment, meta VideoMetadata, outputPath str
 				Width:      fmt.Sprintf("%d", meta.Width),
 				Height:     fmt.Sprintf("%d", meta.Height),
 				ColorSpace: "1-1-1 (Rec. 709)",
-			},
-			Asset: Asset{
-				ID:       "asset-1",
-				Name:     inputFileName,
-				Start:    "0s",
-				Duration: totalDuration,
-				HasVideo: "1",
-				MediaRep: MediaRep{
-					Kind: "original-media",
-					Src:  fileSrc,
-				},
 			},
 		},
 		Library: Library{
@@ -486,13 +468,11 @@ func generateFCPXML(segments []StaticSegment, meta VideoMetadata, outputPath str
 						AudioLayout: "stereo",
 						AudioRate:   "48k",
 						Spine: Spine{
-							AssetClip: AssetClip{
-								Name:     inputFileName,
-								Ref:      "asset-1",
+							Gap: Gap{
+								Name:     "Markers_Layer",
 								Offset:   "0s",
 								Duration: totalDuration,
-								Format:   formatID,
-								TCFormat: "NDF",
+								Start:    "0s",
 								Markers:  markers,
 							},
 						},
@@ -793,7 +773,6 @@ type FCPXML struct {
 
 type Resources struct {
 	Format Format `xml:"format"`
-	Asset  Asset  `xml:"asset"`
 }
 
 type Format struct {
@@ -803,20 +782,6 @@ type Format struct {
 	Width      string `xml:"width,attr"`
 	Height     string `xml:"height,attr"`
 	ColorSpace string `xml:"colorSpace,attr"`
-}
-
-type Asset struct {
-	ID       string   `xml:"id,attr"`
-	Name     string   `xml:"name,attr"`
-	Start    string   `xml:"start,attr"`
-	Duration string   `xml:"duration,attr"`
-	HasVideo string   `xml:"hasVideo,attr"`
-	MediaRep MediaRep `xml:"media-rep"`
-}
-
-type MediaRep struct {
-	Kind string `xml:"kind,attr"`
-	Src  string `xml:"src,attr"`
 }
 
 type Library struct {
@@ -847,16 +812,14 @@ type Sequence struct {
 }
 
 type Spine struct {
-	AssetClip AssetClip `xml:"asset-clip"`
+	Gap Gap `xml:"gap"`
 }
 
-type AssetClip struct {
+type Gap struct {
 	Name     string   `xml:"name,attr"`
-	Ref      string   `xml:"ref,attr"`
 	Offset   string   `xml:"offset,attr"`
 	Duration string   `xml:"duration,attr"`
-	Format   string   `xml:"format,attr"`
-	TCFormat string   `xml:"tcFormat,attr"`
+	Start    string   `xml:"start,attr"`
 	Markers  []Marker `xml:"marker"`
 }
 
