@@ -50,8 +50,6 @@ type AnalysisResult struct {
 	Width        int
 	Height       int
 	TotalFrames  int
-	Threshold    float64
-	CropHeight   int
 	DiffCounts   []int32
 }
 
@@ -250,7 +248,6 @@ func handleVideoAnalysis(videoPath string) error {
 		Width:        width,
 		Height:       height,
 		TotalFrames:  totalFrames,
-		CropHeight:   cropHeight,
 		DiffCounts:   diffCounts,
 	}
 
@@ -724,19 +721,23 @@ func findGobInCurrentDir() string {
 // ---------------------------------------------------------
 
 func frameToRationalTime(frameNum int, fps float64) string {
-	var timescale int
-	isNTSC := isNTSCRate(fps)
+	// 直接使用帧数表示时间: 帧数/帧率s
+	// 例如: 第100帧在30fps下 = "100/30s"
+	fpsInt := int(math.Round(fps))
 
-	if isNTSC {
-		timescale = 30000
-	} else if fps == 24 || fps == 25 || fps == 30 || fps == 50 || fps == 60 {
-		timescale = int(fps) * 1000
-	} else {
-		timescale = 30000
+	// 处理 NTSC 帧率
+	if isNTSCRate(fps) {
+		if math.Abs(fps-29.97) < 0.01 || math.Abs(fps-59.94) < 0.01 {
+			// 29.97fps -> 30000/1001, 所以用 frameNum*1001/30000s
+			return fmt.Sprintf("%d/30000s", frameNum*1001)
+		} else if math.Abs(fps-23.976) < 0.01 {
+			// 23.976fps -> 24000/1001, 所以用 frameNum*1001/24000s
+			return fmt.Sprintf("%d/24000s", frameNum*1001)
+		}
 	}
 
-	timeValue := int64(float64(frameNum) / fps * float64(timescale))
-	return fmt.Sprintf("%d/%ds", timeValue, timescale)
+	// 整数帧率直接用 帧数/帧率s
+	return fmt.Sprintf("%d/%ds", frameNum, fpsInt)
 }
 
 func getFrameDuration(fps float64) string {
