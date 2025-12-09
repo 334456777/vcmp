@@ -234,7 +234,7 @@ func printAnalysisResults(result *AnalysisResult, factor float64) {
 	fmt.Printf("\n阈值为 P%.0f * %.1f = %.0f 时的连续静止时间分布:\n",
 		config.Percentile, config.Factor, threshold)
 	printSegmentDurationDistribution(segments, result.FPS)
-	fmt.Printf("生成FCPXML请使用: vcmp <threshold> [min_duration]\n")
+	// fmt.Printf("生成FCPXML请使用: vcmp <threshold> [min_duration]\n")
 }
 
 func calculateSuggestedThreshold(diffCounts []int32, config ThresholdConfig) float64 {
