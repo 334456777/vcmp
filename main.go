@@ -31,6 +31,7 @@ const (
 	DefaultMinDurationSec  = 20.0
 	BinaryThreshold        = 25
 	FrameBufferSize        = 10
+	percentile			   = 95.0
 	DefaultThresholdFactor = 1.5
 )
 
@@ -52,6 +53,7 @@ type AnalysisResult struct {
 	Height       int
 	TotalFrames  int
 	DiffCounts   []int32
+	SuggestedThreshold float64
 }
 
 type StaticSegment struct {
@@ -224,7 +226,7 @@ func handleGobAnalysis(gobPath string) error {
 func printAnalysisResults(result *AnalysisResult, factor float64) {
 	config := ThresholdConfig{
 		Factor:         factor,
-		Percentile:     95,
+		Percentile:     percentile,
 		MinDurationSec: 0.0,
 	}
 
@@ -264,14 +266,23 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 
 	diffCounts := processFrames(frameChan, matPool, metadata.Width, cropHeight, metadata.TotalFrames)
 
+	// 计算推荐阈值 (P95 * 1.5)
+	config := ThresholdConfig{
+		Factor:         DefaultThresholdFactor,
+		Percentile:     percentile,
+		MinDurationSec: 0.0,
+	}
+	suggestedThreshold := calculateSuggestedThreshold(diffCounts, config)
+
 	return &AnalysisResult{
-		VideoFile:    videoPath,
-		AnalysisTime: time.Now().Format("2006-01-02 15:04:05"),
-		FPS:          metadata.FPS,
-		Width:        metadata.Width,
-		Height:       metadata.Height,
-		TotalFrames:  metadata.TotalFrames,
-		DiffCounts:   diffCounts,
+		VideoFile:          videoPath,
+		AnalysisTime:       time.Now().Format("2006-01-02 15:04:05"),
+		FPS:                metadata.FPS,
+		Width:              metadata.Width,
+		Height:             metadata.Height,
+		TotalFrames:        metadata.TotalFrames,
+		DiffCounts:         diffCounts,
+		SuggestedThreshold: suggestedThreshold,
 	}, nil
 }
 
