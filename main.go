@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"gocv.io/x/gocv"
 )
@@ -47,13 +46,12 @@ type DecodedFrame struct {
 
 type AnalysisResult struct {
 	VideoFile    string
-	AnalysisTime string
 	FPS          float64
 	Width        int
 	Height       int
 	TotalFrames  int
-	DiffCounts   []int32
 	SuggestedThreshold float64
+	DiffCounts   []int32
 }
 
 type StaticSegment struct {
@@ -276,7 +274,6 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 
 	return &AnalysisResult{
 		VideoFile:          videoPath,
-		AnalysisTime:       time.Now().Format("2006-01-02 15:04:05"),
 		FPS:                metadata.FPS,
 		Width:              metadata.Width,
 		Height:             metadata.Height,
@@ -583,8 +580,7 @@ func generateGobFilename(videoPath string) string {
 	baseName := filepath.Base(videoPath)
 	ext := filepath.Ext(baseName)
 	nameWithoutExt := strings.TrimSuffix(baseName, ext)
-	timestamp := time.Now().Format("20060102_150405")
-	return fmt.Sprintf("%s_%s.gob", nameWithoutExt, timestamp)
+	return fmt.Sprintf("%s.gob", nameWithoutExt)
 }
 
 func generateFCPXMLFilename(videoPath string, threshold float64) string {
