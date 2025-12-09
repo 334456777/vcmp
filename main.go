@@ -30,7 +30,7 @@ const (
 	DefaultMinDurationSec  = 20.0
 	BinaryThreshold        = 25
 	FrameBufferSize        = 10
-	percentile			   = 95.0
+	percentile             = 95.0
 	DefaultThresholdFactor = 1.5
 )
 
@@ -45,13 +45,13 @@ type DecodedFrame struct {
 }
 
 type AnalysisResult struct {
-	VideoFile    string
-	FPS          float64
-	Width        int
-	Height       int
-	TotalFrames  int
+	VideoFile          string
+	FPS                float64
+	Width              int
+	Height             int
+	TotalFrames        int
 	SuggestedThreshold float64
-	DiffCounts   []uint16
+	DiffCounts         []uint16
 }
 
 type StaticSegment struct {
