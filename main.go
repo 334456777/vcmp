@@ -31,6 +31,7 @@ const (
 	DefaultMinDurationSec  = 20.0
 	BinaryThreshold        = 25
 	FrameBufferSize        = 10
+	DefaultThresholdFactor = 1.5
 )
 
 // ---------------------------------------------------------
@@ -255,10 +256,19 @@ func handleVideoAnalysis(videoPath string) error {
 		return fmt.Errorf("保存Gob失败: %w", err)
 	}
 
-	fmt.Printf("✓  分析完成 -> %s\n", finalOutputPath)
-	result.PrintDistribution()
-	result.PrintPercentiles(1.5)
-	fmt.Printf("\n生成FCPXML请使用: vcmp <threshold> [min_duration]\n")
+	// 计算建议阈值
+	factor := 1.5
+	p95 := computePercentile(result.DiffCounts, 95)
+	suggestedThreshold := math.Round(p95 * factor)
+
+	// 使用建议阈值生成静态片段
+	minDurationSec := 0.0 // 不设最小时长限制,显示所有片段
+	segments := generateStaticSegments(result.DiffCounts, suggestedThreshold, minDurationSec, result.FPS)
+
+	// 打印新格式的输出
+	fmt.Printf("\n阈值为 P95 * %.1f = %.0f 时的连续静止时间分布:\n", factor, suggestedThreshold)
+	printSegmentDurationDistribution(segments, result.FPS)
+	fmt.Printf("生成FCPXML请使用: vcmp <threshold> [min_duration]\n")
 
 	return nil
 }
@@ -272,8 +282,13 @@ func handleGobToFCPXML(gobPath string, diffCountThreshold, minDurationSec float6
 
 	segments := generateStaticSegments(result.DiffCounts, diffCountThreshold, minDurationSec, result.FPS)
 	if len(segments) == 0 {
-		return fmt.Errorf("未找到静态片段 (阈值: %.0f)", diffCountThreshold)
+		return fmt.Errorf("未找到静态片段 (阈值: %.0f, 最小时长: %.0f秒)", diffCountThreshold, minDurationSec)
 	}
+
+	// 添加: 显示片段分布预览
+	fmt.Printf("\n阈值 %.0f, 最小时长 %.0fs 的片段分布:\n", diffCountThreshold, minDurationSec)
+	printSegmentDurationDistribution(segments, result.FPS)
+	fmt.Println()
 
 	baseName := filepath.Base(result.VideoFile)
 	ext := filepath.Ext(baseName)
@@ -293,8 +308,8 @@ func handleGobToFCPXML(gobPath string, diffCountThreshold, minDurationSec float6
 		return fmt.Errorf("生成FCPXML失败: %w", err)
 	}
 
-	fmt.Printf("✓  FCPXML已生成 -> %s\n", finalOutputPath)
-	fmt.Printf("   检测到 %d 个静态片段 (阈值: %.0f, 最小时长: %.0f秒)\n", len(segments), diffCountThreshold, minDurationSec)
+	fmt.Printf("✔  FCPXML已生成 -> %s\n", finalOutputPath)
+	fmt.Printf("   检测到 %d 个静态片段\n", len(segments))
 
 	return nil
 }
@@ -306,9 +321,19 @@ func handleGobAnalysis(gobPath string) error {
 		return fmt.Errorf("加载Gob失败: %w", err)
 	}
 
-	result.PrintDistribution()
-	result.PrintPercentiles(1.5)
-	fmt.Printf("\n生成FCPXML请使用: vcmp <threshold> [min_duration]\n")
+	// 计算建议阈值
+	factor := DefaultThresholdFactor
+	p95 := computePercentile(result.DiffCounts, 95)
+	suggestedThreshold := math.Round(p95 * factor)
+
+	// 使用建议阈值生成静态片段
+	minDurationSec := 0.0 // 不设最小时长限制,显示所有片段
+	segments := generateStaticSegments(result.DiffCounts, suggestedThreshold, minDurationSec, result.FPS)
+
+	// 打印新格式的输出
+	fmt.Printf("\n阈值为 P95 * %.1f = %.0f 时的连续静止时间分布:\n", factor, suggestedThreshold)
+	printSegmentDurationDistribution(segments, result.FPS)
+	fmt.Printf("生成FCPXML请使用: vcmp <threshold> [min_duration]\n")
 
 	return nil
 }
@@ -550,65 +575,56 @@ func loadAnalysisFromGob(filePath string) (*AnalysisResult, error) {
 // Statistics & UI
 // ---------------------------------------------------------
 
-func (r *AnalysisResult) PrintDistribution() {
-	diffCounts := r.DiffCounts
-	if len(diffCounts) == 0 {
-		fmt.Println("警告: 无帧数据可分析")
+func printSegmentDurationDistribution(segments []StaticSegment, fps float64) {
+	if len(segments) == 0 {
+		fmt.Println("未检测到静态片段")
 		return
 	}
 
+	// 定义时间范围(秒)
 	ranges := []struct {
-		min, max int32
+		min, max float64
 		name     string
 	}{
-		{0, 100, "0-100"},
-		{101, 1000, "101-1,000"},
-		{1001, 10000, "1,001-10,000"},
-		{10001, 50000, "10,001-50,000"},
-		{50001, 100000, "50,001-100,000"},
-		{100001, 500000, "100,001-500,000"},
-		{500001, -1, "500,001+"},
+		{0, 1, "0-1s"},
+		{1, 3, "1-3s"},
+		{3, 7, "3-7s"},
+		{7, 10, "7-10s"},
+		{10, 20, "10-20s"},
+		{20, 40, "20-40s"},
+		{40, 60, "40-60s"},
+		{60, -1, "60s+"},
 	}
 
+	// 统计每个范围内的片段数
 	counts := make([]int, len(ranges))
-	for _, diffCount := range diffCounts {
+	for _, seg := range segments {
+		durationSec := float64(seg.DurationFrames) / fps
+
 		for i, r := range ranges {
 			if r.max == -1 {
-				if diffCount >= r.min {
+				if durationSec >= r.min {
 					counts[i]++
 				}
-			} else if diffCount >= r.min && diffCount <= r.max {
+			} else if durationSec >= r.min && durationSec < r.max {
 				counts[i]++
 			}
 		}
 	}
 
-	fmt.Println("\nDiff Count 分布:")
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-	totalFrames := len(diffCounts)
+	totalSegments := len(segments)
 	for i, r := range ranges {
-		percentage := float64(counts[i]) / float64(totalFrames) * 100
-		fmt.Printf("  %-18s %6d 帧 (%.1f%%)\n", r.name, counts[i], percentage)
+		if counts[i] > 0 {
+			percentage := float64(counts[i]) / float64(totalSegments) * 100
+			fmt.Printf("  %-18s %4d 个 (%.1f%%)\n", r.name, counts[i], percentage)
+		} else {
+			fmt.Printf("  %-18s %4d 个 (0.0%%)\n", r.name, 0)
+		}
 	}
 
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-}
-
-func (r *AnalysisResult) PrintPercentiles(factor float64) {
-	diffCounts := r.DiffCounts
-	if len(diffCounts) == 0 {
-		fmt.Println("警告: 无帧数据可分析")
-		return
-	}
-
-	p50 := computePercentile(diffCounts, 50)
-	p90 := computePercentile(diffCounts, 90)
-	p95 := computePercentile(diffCounts, 95)
-	p99 := computePercentile(diffCounts, 99)
-	suggested := math.Round(p95 * factor)
-
-	fmt.Printf("P50 %.0f | P90 %.0f | P95 %.0f | P99 %.0f | 建议阈值 %.0f", p50, p90, p95, p99, suggested)
 }
 
 func computePercentile(values []int32, percent float64) float64 {
@@ -664,9 +680,7 @@ func updateProgressBar(current, total int, prefix string) {
 // Environment Discovery
 // ---------------------------------------------------------
 
-func findVideoInCurrentDir() string {
-	videoExtensions := []string{".mp4", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".m4v", ".mpg", ".mpeg"}
-
+func findFileWithExtensions(extensions []string) string {
 	files, err := os.ReadDir(".")
 	if err != nil {
 		return ""
@@ -682,7 +696,7 @@ func findVideoInCurrentDir() string {
 		}
 
 		fileName := file.Name()
-		for _, ext := range videoExtensions {
+		for _, ext := range extensions {
 			if strings.HasSuffix(strings.ToLower(fileName), ext) {
 				return fileName
 			}
@@ -692,28 +706,12 @@ func findVideoInCurrentDir() string {
 	return ""
 }
 
+func findVideoInCurrentDir() string {
+	return findFileWithExtensions([]string{".mp4", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".m4v", ".mpg", ".mpeg"})
+}
+
 func findGobInCurrentDir() string {
-	files, err := os.ReadDir(".")
-	if err != nil {
-		return ""
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Name() < files[j].Name()
-	})
-
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-
-		fileName := file.Name()
-		if strings.HasSuffix(strings.ToLower(fileName), ".gob") {
-			return fileName
-		}
-	}
-
-	return ""
+	return findFileWithExtensions([]string{".gob"})
 }
 
 // ---------------------------------------------------------
