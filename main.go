@@ -78,21 +78,18 @@ type ThresholdConfig struct {
 // ---------------------------------------------------------
 
 func main() {
-	// 1. 解析命令行参数
 	flag.Parse()
 	args := flag.Args()
 
 	var diffCountThreshold float64 = -1
 	var minDurationSec float64 = DefaultMinDurationSec
 
-	// 尝试解析第一个位置参数: 判定静止的阈值 (Threshold)
 	if len(args) > 0 {
 		if val, err := strconv.ParseFloat(args[0], 64); err == nil {
 			diffCountThreshold = val
 		}
 	}
 
-	// 尝试解析第二个位置参数: 最小静止持续时间 (Min Duration)
 	if len(args) > 1 {
 		if val, err := strconv.ParseFloat(args[1], 64); err == nil {
 			minDurationSec = val
