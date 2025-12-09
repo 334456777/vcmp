@@ -67,6 +67,12 @@ type VideoMetadata struct {
 	FilePath    string
 }
 
+type ThresholdConfig struct {
+	Factor         float64
+	Percentile     float64
+	MinDurationSec float64
+}
+
 // ---------------------------------------------------------
 // Entry Point
 // ---------------------------------------------------------
@@ -93,55 +99,56 @@ func main() {
 		}
 	}
 
-	var finalInputPath string
-	var isGobInput bool
-
-	// 2. 自动检测输入文件 (优先级: Gob > 视频)
-	foundGob := findGobInCurrentDir()
-	foundVideo := findVideoInCurrentDir()
-
-	if foundGob != "" {
-		finalInputPath = foundGob
-		isGobInput = true
-	} else if foundVideo != "" {
-		finalInputPath = foundVideo
-		isGobInput = false
-	} else {
-		fmt.Println("错误: 当前目录未找到 Gob 或视频文件")
-		fmt.Println()
-		fmt.Println("用法:")
-		fmt.Println("  vcmp                                # 分析视频生成gob或显示gob统计")
-		fmt.Println("  vcmp <threshold>                    # 使用gob生成FCPXML (阈值)")
-		fmt.Println("  vcmp <threshold> <min_duration>     # 指定阈值和最小持续时间(秒)")
-		fmt.Println()
-		os.Exit(1)
+	finalInputPath, isGobInput := detectInputFile()
+	if finalInputPath == "" {
+		printUsageAndExit()
 	}
 
-	// 3. 路由逻辑分发
-
-	// 场景 A: 输入是 Gob 且用户指定了阈值 -> 生成 FCPXML 切割清单
-	if isGobInput && diffCountThreshold >= 0 {
-		if err := handleGobToFCPXML(finalInputPath, diffCountThreshold, minDurationSec); err != nil {
-			fmt.Printf("错误: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// 场景 B: 输入是 Gob 但用户未指定阈值 -> 仅显示统计数据 (直方图/百分位数)
-	if isGobInput && diffCountThreshold < 0 {
-		if err := handleGobAnalysis(finalInputPath); err != nil {
-			fmt.Printf("错误: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// 场景 C: 输入是视频 -> 执行耗时的视频分析任务并保存 Gob 文件
-	if err := handleVideoAnalysis(finalInputPath); err != nil {
+	if err := routeCommand(finalInputPath, isGobInput, diffCountThreshold, minDurationSec); err != nil {
 		fmt.Printf("错误: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// ---------------------------------------------------------
+// Command Routing
+// ---------------------------------------------------------
+
+func routeCommand(inputPath string, isGobInput bool, threshold, minDuration float64) error {
+	if isGobInput && threshold >= 0 {
+		return handleGobToFCPXML(inputPath, threshold, minDuration)
+	}
+
+	if isGobInput {
+		return handleGobAnalysis(inputPath)
+	}
+
+	return handleVideoAnalysis(inputPath)
+}
+
+func detectInputFile() (string, bool) {
+	foundGob := findGobInCurrentDir()
+	if foundGob != "" {
+		return foundGob, true
+	}
+
+	foundVideo := findVideoInCurrentDir()
+	if foundVideo != "" {
+		return foundVideo, false
+	}
+
+	return "", false
+}
+
+func printUsageAndExit() {
+	fmt.Println("错误: 当前目录未找到 Gob 或视频文件")
+	fmt.Println()
+	fmt.Println("用法:")
+	fmt.Println("  vcmp                                # 分析视频生成gob或显示gob统计")
+	fmt.Println("  vcmp <threshold>                    # 使用gob生成FCPXML (阈值)")
+	fmt.Println("  vcmp <threshold> <min_duration>     # 指定阈值和最小持续时间(秒)")
+	fmt.Println()
+	os.Exit(1)
 }
 
 // ---------------------------------------------------------
@@ -149,47 +156,163 @@ func main() {
 // ---------------------------------------------------------
 
 func handleVideoAnalysis(videoPath string) error {
-	baseName := filepath.Base(videoPath)
-	ext := filepath.Ext(baseName)
-	nameWithoutExt := strings.TrimSuffix(baseName, ext)
-	timestamp := time.Now().Format("20060102_150405")
-
-	finalOutputPath := fmt.Sprintf("%s_%s.gob", nameWithoutExt, timestamp)
-
 	fmt.Printf(">> 分析视频: %s\n", videoPath)
 
+	result, err := analyzeVideo(videoPath)
+	if err != nil {
+		return fmt.Errorf("分析视频失败: %w", err)
+	}
+
+	outputPath := generateGobFilename(videoPath)
+	if err := result.SaveToGob(outputPath); err != nil {
+		return fmt.Errorf("保存Gob失败: %w", err)
+	}
+
+	printAnalysisResults(result, DefaultThresholdFactor)
+	return nil
+}
+
+func handleGobToFCPXML(gobPath string, diffCountThreshold, minDurationSec float64) error {
+	fmt.Printf(">> 加载分析数据: %s\n", gobPath)
+
+	result, err := loadAnalysisFromGob(gobPath)
+	if err != nil {
+		return fmt.Errorf("加载Gob失败: %w", err)
+	}
+
+	segments := generateStaticSegments(result.DiffCounts, diffCountThreshold, minDurationSec, result.FPS)
+	if len(segments) == 0 {
+		return fmt.Errorf("未找到静态片段 (阈值: %.0f, 最小时长: %.0f秒)", diffCountThreshold, minDurationSec)
+	}
+
+	fmt.Printf("\n阈值 %.0f, 最小时长 %.0fs 的片段分布:\n", diffCountThreshold, minDurationSec)
+	printSegmentDurationDistribution(segments, result.FPS)
+	fmt.Println()
+
+	outputPath := generateFCPXMLFilename(result.VideoFile, diffCountThreshold)
+	meta := VideoMetadata{
+		FPS:         result.FPS,
+		Width:       result.Width,
+		Height:      result.Height,
+		TotalFrames: result.TotalFrames,
+		FilePath:    result.VideoFile,
+	}
+
+	if err := generateFCPXML(segments, meta, outputPath); err != nil {
+		return fmt.Errorf("生成FCPXML失败: %w", err)
+	}
+
+	fmt.Printf("✓  FCPXML已生成 -> %s\n", outputPath)
+	fmt.Printf("   检测到 %d 个静态片段\n", len(segments))
+
+	return nil
+}
+
+func handleGobAnalysis(gobPath string) error {
+	fmt.Printf(">> 加载分析数据: %s\n", gobPath)
+
+	result, err := loadAnalysisFromGob(gobPath)
+	if err != nil {
+		return fmt.Errorf("加载Gob失败: %w", err)
+	}
+
+	printAnalysisResults(result, DefaultThresholdFactor)
+	return nil
+}
+
+// ---------------------------------------------------------
+// Analysis Results Display (提取的公共函数)
+// ---------------------------------------------------------
+
+func printAnalysisResults(result *AnalysisResult, factor float64) {
+	config := ThresholdConfig{
+		Factor:         factor,
+		Percentile:     95,
+		MinDurationSec: 0.0,
+	}
+
+	threshold := calculateSuggestedThreshold(result.DiffCounts, config)
+	segments := generateStaticSegments(result.DiffCounts, threshold, config.MinDurationSec, result.FPS)
+
+	fmt.Printf("\n阈值为 P%.0f * %.1f = %.0f 时的连续静止时间分布:\n",
+		config.Percentile, config.Factor, threshold)
+	printSegmentDurationDistribution(segments, result.FPS)
+	fmt.Printf("生成FCPXML请使用: vcmp <threshold> [min_duration]\n")
+}
+
+func calculateSuggestedThreshold(diffCounts []int32, config ThresholdConfig) float64 {
+	percentileValue := computePercentile(diffCounts, config.Percentile)
+	return math.Round(percentileValue * config.Factor)
+}
+
+// ---------------------------------------------------------
+// Video Analysis Core
+// ---------------------------------------------------------
+
+func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 	video, err := gocv.VideoCaptureFileWithAPI(videoPath, gocv.VideoCaptureAVFoundation)
 	if err != nil {
-		return fmt.Errorf("打开视频失败: %w", err)
+		return nil, fmt.Errorf("打开视频失败: %w", err)
 	}
 	defer video.Close()
 
-	fps := video.Get(gocv.VideoCaptureFPS)
-	width := int(video.Get(gocv.VideoCaptureFrameWidth))
-	height := int(video.Get(gocv.VideoCaptureFrameHeight))
-	totalFrames := int(video.Get(gocv.VideoCaptureFrameCount))
+	metadata := extractVideoMetadata(video, videoPath)
+	cropHeight := calculateCropHeight(metadata.Height)
 
+	matPool := createMatPool(FrameBufferSize + 2)
+	defer closeMatPool(matPool)
+
+	frameChan := make(chan DecodedFrame, FrameBufferSize)
+	go frameProducer(video, frameChan, matPool)
+
+	diffCounts := processFrames(frameChan, matPool, metadata.Width, cropHeight, metadata.TotalFrames)
+
+	return &AnalysisResult{
+		VideoFile:    videoPath,
+		AnalysisTime: time.Now().Format("2006-01-02 15:04:05"),
+		FPS:          metadata.FPS,
+		Width:        metadata.Width,
+		Height:       metadata.Height,
+		TotalFrames:  metadata.TotalFrames,
+		DiffCounts:   diffCounts,
+	}, nil
+}
+
+func extractVideoMetadata(video *gocv.VideoCapture, filePath string) VideoMetadata {
+	return VideoMetadata{
+		FPS:         video.Get(gocv.VideoCaptureFPS),
+		Width:       int(video.Get(gocv.VideoCaptureFrameWidth)),
+		Height:      int(video.Get(gocv.VideoCaptureFrameHeight)),
+		TotalFrames: int(video.Get(gocv.VideoCaptureFrameCount)),
+		FilePath:    filePath,
+	}
+}
+
+func calculateCropHeight(height int) int {
 	bottomMaskHeight := int(float64(height) * CropIgnoreRatio)
 	cropHeight := height - bottomMaskHeight
 	if cropHeight < height/2 {
-		cropHeight = height
+		return height
 	}
+	return cropHeight
+}
 
-	poolSize := FrameBufferSize + 2
-	matBuffer := make(chan gocv.Mat, poolSize)
-	for i := 0; i < poolSize; i++ {
-		matBuffer <- gocv.NewMat()
+func createMatPool(size int) chan gocv.Mat {
+	pool := make(chan gocv.Mat, size)
+	for i := 0; i < size; i++ {
+		pool <- gocv.NewMat()
 	}
-	defer func() {
-		close(matBuffer)
-		for m := range matBuffer {
-			m.Close()
-		}
-	}()
+	return pool
+}
 
-	frameChan := make(chan DecodedFrame, FrameBufferSize)
-	go frameProducer(video, frameChan, matBuffer)
+func closeMatPool(pool chan gocv.Mat) {
+	close(pool)
+	for m := range pool {
+		m.Close()
+	}
+}
 
+func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, cropHeight, totalFrames int) []int32 {
 	diffCounts := make([]int32, 0, totalFrames)
 
 	currentGray, frameDelta, prevGray, eroded := gocv.NewMat(), gocv.NewMat(), gocv.NewMat(), gocv.NewMat()
@@ -228,7 +351,7 @@ func handleVideoAnalysis(videoPath string) error {
 		currentGray.CopyTo(&prevGray)
 
 		select {
-		case matBuffer <- img:
+		case matPool <- img:
 		default:
 			img.Close()
 		}
@@ -242,105 +365,8 @@ func handleVideoAnalysis(videoPath string) error {
 		updateProgressBar(totalFrames, totalFrames, ">> 分析中")
 	}
 
-	result := AnalysisResult{
-		VideoFile:    videoPath,
-		AnalysisTime: time.Now().Format("2006-01-02 15:04:05"),
-		FPS:          fps,
-		Width:        width,
-		Height:       height,
-		TotalFrames:  totalFrames,
-		DiffCounts:   diffCounts,
-	}
-
-	if err := result.SaveToGob(finalOutputPath); err != nil {
-		return fmt.Errorf("保存Gob失败: %w", err)
-	}
-
-	// 计算建议阈值
-	factor := 1.5
-	p95 := computePercentile(result.DiffCounts, 95)
-	suggestedThreshold := math.Round(p95 * factor)
-
-	// 使用建议阈值生成静态片段
-	minDurationSec := 0.0 // 不设最小时长限制,显示所有片段
-	segments := generateStaticSegments(result.DiffCounts, suggestedThreshold, minDurationSec, result.FPS)
-
-	// 打印新格式的输出
-	fmt.Printf("\n阈值为 P95 * %.1f = %.0f 时的连续静止时间分布:\n", factor, suggestedThreshold)
-	printSegmentDurationDistribution(segments, result.FPS)
-	fmt.Printf("生成FCPXML请使用: vcmp <threshold> [min_duration]\n")
-
-	return nil
+	return diffCounts
 }
-
-func handleGobToFCPXML(gobPath string, diffCountThreshold, minDurationSec float64) error {
-	fmt.Printf(">> 加载分析数据: %s\n", gobPath)
-	result, err := loadAnalysisFromGob(gobPath)
-	if err != nil {
-		return fmt.Errorf("加载Gob失败: %w", err)
-	}
-
-	segments := generateStaticSegments(result.DiffCounts, diffCountThreshold, minDurationSec, result.FPS)
-	if len(segments) == 0 {
-		return fmt.Errorf("未找到静态片段 (阈值: %.0f, 最小时长: %.0f秒)", diffCountThreshold, minDurationSec)
-	}
-
-	// 添加: 显示片段分布预览
-	fmt.Printf("\n阈值 %.0f, 最小时长 %.0fs 的片段分布:\n", diffCountThreshold, minDurationSec)
-	printSegmentDurationDistribution(segments, result.FPS)
-	fmt.Println()
-
-	baseName := filepath.Base(result.VideoFile)
-	ext := filepath.Ext(baseName)
-	nameWithoutExt := strings.TrimSuffix(baseName, ext)
-
-	finalOutputPath := fmt.Sprintf("%s_threshold_%.0f.fcpxml", nameWithoutExt, diffCountThreshold)
-
-	meta := VideoMetadata{
-		FPS:         result.FPS,
-		Width:       result.Width,
-		Height:      result.Height,
-		TotalFrames: result.TotalFrames,
-		FilePath:    result.VideoFile,
-	}
-
-	if err := generateFCPXML(segments, meta, finalOutputPath); err != nil {
-		return fmt.Errorf("生成FCPXML失败: %w", err)
-	}
-
-	fmt.Printf("✔  FCPXML已生成 -> %s\n", finalOutputPath)
-	fmt.Printf("   检测到 %d 个静态片段\n", len(segments))
-
-	return nil
-}
-
-func handleGobAnalysis(gobPath string) error {
-	fmt.Printf(">> 加载分析数据: %s\n", gobPath)
-	result, err := loadAnalysisFromGob(gobPath)
-	if err != nil {
-		return fmt.Errorf("加载Gob失败: %w", err)
-	}
-
-	// 计算建议阈值
-	factor := DefaultThresholdFactor
-	p95 := computePercentile(result.DiffCounts, 95)
-	suggestedThreshold := math.Round(p95 * factor)
-
-	// 使用建议阈值生成静态片段
-	minDurationSec := 0.0 // 不设最小时长限制,显示所有片段
-	segments := generateStaticSegments(result.DiffCounts, suggestedThreshold, minDurationSec, result.FPS)
-
-	// 打印新格式的输出
-	fmt.Printf("\n阈值为 P95 * %.1f = %.0f 时的连续静止时间分布:\n", factor, suggestedThreshold)
-	printSegmentDurationDistribution(segments, result.FPS)
-	fmt.Printf("生成FCPXML请使用: vcmp <threshold> [min_duration]\n")
-
-	return nil
-}
-
-// ---------------------------------------------------------
-// Core Logic & Algorithms
-// ---------------------------------------------------------
 
 func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matBuffer chan gocv.Mat) {
 	defer close(frameChan)
@@ -357,7 +383,6 @@ func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matB
 			fromPool = true
 		default:
 			matToSend = gocv.NewMat()
-			fromPool = false
 		}
 
 		if ok := video.Read(&matToSend); !ok || matToSend.Empty() {
@@ -389,6 +414,10 @@ func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matB
 	}
 }
 
+// ---------------------------------------------------------
+// Segment Generation
+// ---------------------------------------------------------
+
 func generateStaticSegments(diffCounts []int32, diffCountThreshold float64, minDurationSec float64, fps float64) []StaticSegment {
 	if len(diffCounts) == 0 {
 		return nil
@@ -408,14 +437,8 @@ func generateStaticSegments(diffCounts []int32, diffCountThreshold float64, minD
 			}
 		} else {
 			if inStaticSegment {
-				durationFrames := currentFrame - segmentStartFrame
-				durationSeconds := float64(durationFrames) / fps
-
-				if durationSeconds >= minDurationSec {
-					segments = append(segments, StaticSegment{
-						StartFrame:     segmentStartFrame,
-						DurationFrames: durationFrames,
-					})
+				if seg := createSegmentIfValid(segmentStartFrame, currentFrame, fps, minDurationSec); seg != nil {
+					segments = append(segments, *seg)
 				}
 				inStaticSegment = false
 			}
@@ -424,43 +447,37 @@ func generateStaticSegments(diffCounts []int32, diffCountThreshold float64, minD
 
 	if inStaticSegment && len(diffCounts) > 0 {
 		lastFrameNum := len(diffCounts)
-		durationFrames := lastFrameNum - segmentStartFrame
-		durationSeconds := float64(durationFrames) / fps
-
-		if durationSeconds >= minDurationSec {
-			segments = append(segments, StaticSegment{
-				StartFrame:     segmentStartFrame,
-				DurationFrames: durationFrames,
-			})
+		if seg := createSegmentIfValid(segmentStartFrame, lastFrameNum, fps, minDurationSec); seg != nil {
+			segments = append(segments, *seg)
 		}
 	}
 
 	return segments
 }
 
+func createSegmentIfValid(startFrame, endFrame int, fps, minDurationSec float64) *StaticSegment {
+	durationFrames := endFrame - startFrame
+	durationSeconds := float64(durationFrames) / fps
+
+	if durationSeconds >= minDurationSec {
+		return &StaticSegment{
+			StartFrame:     startFrame,
+			DurationFrames: durationFrames,
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------
+// FCPXML Generation
+// ---------------------------------------------------------
+
 func generateFCPXML(segments []StaticSegment, meta VideoMetadata, outputPath string) error {
 	formatID := "r1"
 	frameDuration := getFrameDuration(meta.FPS)
 	totalDuration := frameToRationalTime(meta.TotalFrames, meta.FPS)
 
-	markers := make([]Marker, 0, len(segments)*2)
-
-	for i, seg := range segments {
-		startMarker := Marker{
-			Start:    frameToRationalTime(seg.StartFrame, meta.FPS),
-			Duration: frameToRationalTime(1, meta.FPS),
-			Value:    fmt.Sprintf("%s%d", MarkerStartPrefix, i+1),
-		}
-
-		endFrame := seg.StartFrame + seg.DurationFrames
-		stopMarker := Marker{
-			Start:    frameToRationalTime(endFrame, meta.FPS),
-			Duration: frameToRationalTime(1, meta.FPS),
-			Value:    fmt.Sprintf("%s%d", MarkerStopPrefix, i+1),
-		}
-
-		markers = append(markers, startMarker, stopMarker)
-	}
+	markers := createMarkers(segments, meta.FPS)
 
 	fcpxml := FCPXML{
 		Version: "1.11",
@@ -504,6 +521,33 @@ func generateFCPXML(segments []StaticSegment, meta VideoMetadata, outputPath str
 		},
 	}
 
+	return writeFCPXMLFile(outputPath, fcpxml)
+}
+
+func createMarkers(segments []StaticSegment, fps float64) []Marker {
+	markers := make([]Marker, 0, len(segments)*2)
+
+	for i, seg := range segments {
+		startMarker := Marker{
+			Start:    frameToRationalTime(seg.StartFrame, fps),
+			Duration: frameToRationalTime(1, fps),
+			Value:    fmt.Sprintf("%s%d", MarkerStartPrefix, i+1),
+		}
+
+		endFrame := seg.StartFrame + seg.DurationFrames
+		stopMarker := Marker{
+			Start:    frameToRationalTime(endFrame, fps),
+			Duration: frameToRationalTime(1, fps),
+			Value:    fmt.Sprintf("%s%d", MarkerStopPrefix, i+1),
+		}
+
+		markers = append(markers, startMarker, stopMarker)
+	}
+
+	return markers
+}
+
+func writeFCPXMLFile(outputPath string, fcpxml FCPXML) error {
 	file, err := os.Create(outputPath)
 	if err != nil {
 		return fmt.Errorf("创建输出文件失败: %w", err)
@@ -524,6 +568,25 @@ func generateFCPXML(segments []StaticSegment, meta VideoMetadata, outputPath str
 }
 
 // ---------------------------------------------------------
+// File Naming
+// ---------------------------------------------------------
+
+func generateGobFilename(videoPath string) string {
+	baseName := filepath.Base(videoPath)
+	ext := filepath.Ext(baseName)
+	nameWithoutExt := strings.TrimSuffix(baseName, ext)
+	timestamp := time.Now().Format("20060102_150405")
+	return fmt.Sprintf("%s_%s.gob", nameWithoutExt, timestamp)
+}
+
+func generateFCPXMLFilename(videoPath string, threshold float64) string {
+	baseName := filepath.Base(videoPath)
+	ext := filepath.Ext(baseName)
+	nameWithoutExt := strings.TrimSuffix(baseName, ext)
+	return fmt.Sprintf("%s_threshold_%.0f.fcpxml", nameWithoutExt, threshold)
+}
+
+// ---------------------------------------------------------
 // Data Persistence
 // ---------------------------------------------------------
 
@@ -535,14 +598,10 @@ func (r *AnalysisResult) SaveToGob(outputPath string) error {
 	defer file.Close()
 
 	gw := gzip.NewWriter(file)
+	defer gw.Close()
+
 	encoder := gob.NewEncoder(gw)
-
 	if err := encoder.Encode(r); err != nil {
-		_ = gw.Close()
-		return err
-	}
-
-	if err := gw.Close(); err != nil {
 		return err
 	}
 
@@ -572,7 +631,7 @@ func loadAnalysisFromGob(filePath string) (*AnalysisResult, error) {
 }
 
 // ---------------------------------------------------------
-// Statistics & UI
+// Statistics & Display
 // ---------------------------------------------------------
 
 func printSegmentDurationDistribution(segments []StaticSegment, fps float64) {
@@ -581,7 +640,6 @@ func printSegmentDurationDistribution(segments []StaticSegment, fps float64) {
 		return
 	}
 
-	// 定义时间范围(秒)
 	ranges := []struct {
 		min, max float64
 		name     string
@@ -596,35 +654,46 @@ func printSegmentDurationDistribution(segments []StaticSegment, fps float64) {
 		{60, -1, "60s+"},
 	}
 
-	// 统计每个范围内的片段数
+	counts := countSegmentsByDuration(segments, ranges, fps)
+	printDistributionTable(ranges, counts, len(segments))
+}
+
+func countSegmentsByDuration(segments []StaticSegment, ranges []struct {
+	min, max float64
+	name     string
+}, fps float64) []int {
 	counts := make([]int, len(ranges))
+
 	for _, seg := range segments {
 		durationSec := float64(seg.DurationFrames) / fps
 
 		for i, r := range ranges {
-			if r.max == -1 {
-				if durationSec >= r.min {
-					counts[i]++
-				}
-			} else if durationSec >= r.min && durationSec < r.max {
+			if (r.max == -1 && durationSec >= r.min) ||
+				(r.max != -1 && durationSec >= r.min && durationSec < r.max) {
 				counts[i]++
+				break
 			}
 		}
 	}
 
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	return counts
+}
 
-	totalSegments := len(segments)
+func printDistributionTable(ranges []struct {
+	min, max float64
+	name     string
+}, counts []int, totalSegments int) {
+	fmt.Println("┌────────────────────────────────────────┐")
+
 	for i, r := range ranges {
-		if counts[i] > 0 {
-			percentage := float64(counts[i]) / float64(totalSegments) * 100
-			fmt.Printf("  %-18s %4d 个 (%.1f%%)\n", r.name, counts[i], percentage)
-		} else {
-			fmt.Printf("  %-18s %4d 个 (0.0%%)\n", r.name, 0)
+		percentage := 0.0
+		if totalSegments > 0 {
+			percentage = float64(counts[i]) / float64(totalSegments) * 100
 		}
+		fmt.Printf("  %-18s %4d 个 (%.1f%%)\n", r.name, counts[i], percentage)
 	}
 
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("└────────────────────────────────────────┘")
 }
 
 func computePercentile(values []int32, percent float64) float64 {
@@ -677,7 +746,7 @@ func updateProgressBar(current, total int, prefix string) {
 }
 
 // ---------------------------------------------------------
-// Environment Discovery
+// File Discovery
 // ---------------------------------------------------------
 
 func findFileWithExtensions(extensions []string) string {
@@ -715,48 +784,45 @@ func findGobInCurrentDir() string {
 }
 
 // ---------------------------------------------------------
-// Low-Level Utilities
+// Time Utilities
 // ---------------------------------------------------------
 
 func frameToRationalTime(frameNum int, fps float64) string {
-	// 直接使用帧数表示时间: 帧数/帧率s
-	// 例如: 第100帧在30fps下 = "100/30s"
 	fpsInt := int(math.Round(fps))
 
-	// 处理 NTSC 帧率
 	if isNTSCRate(fps) {
 		if math.Abs(fps-29.97) < 0.01 || math.Abs(fps-59.94) < 0.01 {
-			// 29.97fps -> 30000/1001, 所以用 frameNum*1001/30000s
 			return fmt.Sprintf("%d/30000s", frameNum*1001)
 		} else if math.Abs(fps-23.976) < 0.01 {
-			// 23.976fps -> 24000/1001, 所以用 frameNum*1001/24000s
 			return fmt.Sprintf("%d/24000s", frameNum*1001)
 		}
 	}
 
-	// 整数帧率直接用 帧数/帧率s
 	return fmt.Sprintf("%d/%ds", frameNum, fpsInt)
 }
 
 func getFrameDuration(fps float64) string {
-	if math.Abs(fps-29.97) < 0.01 {
+	switch {
+	case math.Abs(fps-29.97) < 0.01:
 		return "1001/30000s"
-	} else if math.Abs(fps-23.976) < 0.01 {
+	case math.Abs(fps-23.976) < 0.01:
 		return "1001/24000s"
-	} else if fps == 30 {
+	case fps == 30:
 		return "100/3000s"
-	} else if fps == 24 {
+	case fps == 24:
 		return "100/2400s"
-	} else if fps == 25 {
+	case fps == 25:
 		return "100/2500s"
+	default:
+		return fmt.Sprintf("1/%ds", int(fps))
 	}
-
-	return fmt.Sprintf("1/%ds", int(fps))
 }
 
 func isNTSCRate(fps float64) bool {
 	const epsilon = 0.01
-	return math.Abs(fps-29.97) < epsilon || math.Abs(fps-23.976) < epsilon || math.Abs(fps-59.94) < epsilon
+	return math.Abs(fps-29.97) < epsilon ||
+		math.Abs(fps-23.976) < epsilon ||
+		math.Abs(fps-59.94) < epsilon
 }
 
 // ---------------------------------------------------------
