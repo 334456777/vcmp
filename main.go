@@ -51,7 +51,7 @@ type AnalysisResult struct {
 	Height             int
 	TotalFrames        int
 	SuggestedThreshold float64
-	DiffCounts         []uint16
+	DiffCounts         []uint32
 }
 
 type StaticSegment struct {
@@ -237,7 +237,7 @@ func printAnalysisResults(result *AnalysisResult, factor float64) {
 	// fmt.Printf("生成FCPXML请使用: vcmp <threshold> [min_duration]\n")
 }
 
-func calculateSuggestedThreshold(diffCounts []uint16, config ThresholdConfig) float64 {
+func calculateSuggestedThreshold(diffCounts []uint32, config ThresholdConfig) float64 {
 	percentileValue := computePercentile(diffCounts, config.Percentile)
 	return math.Round(percentileValue * config.Factor)
 }
@@ -317,8 +317,8 @@ func closeMatPool(pool chan gocv.Mat) {
 	}
 }
 
-func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, cropHeight, totalFrames int) []uint16 {
-	diffCounts := make([]uint16, 0, totalFrames)
+func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, cropHeight, totalFrames int) []uint32 {
+	diffCounts := make([]uint32, 0, totalFrames)
 
 	currentGray, frameDelta, prevGray, eroded := gocv.NewMat(), gocv.NewMat(), gocv.NewMat(), gocv.NewMat()
 	kernel := gocv.GetStructuringElement(gocv.MorphRect, image.Point{X: 3, Y: 3})
@@ -350,7 +350,7 @@ func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, 
 			gocv.Erode(frameDelta, &eroded, kernel)
 
 			diffCount := gocv.CountNonZero(eroded)
-			diffCounts = append(diffCounts, uint16(diffCount))
+			diffCounts = append(diffCounts, uint32(diffCount))
 		}
 
 		currentGray.CopyTo(&prevGray)
@@ -423,7 +423,7 @@ func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matB
 // Segment Generation
 // ---------------------------------------------------------
 
-func generateStaticSegments(diffCounts []uint16, diffCountThreshold float64, minDurationSec float64, fps float64) []StaticSegment {
+func generateStaticSegments(diffCounts []uint32, diffCountThreshold float64, minDurationSec float64, fps float64) []StaticSegment {
 	if len(diffCounts) == 0 {
 		return nil
 	}
@@ -700,7 +700,7 @@ func printDistributionTable(ranges []struct {
 	fmt.Println("└────────────────────────────────────────┘")
 }
 
-func computePercentile(values []uint16, percent float64) float64 {
+func computePercentile(values []uint32, percent float64) float64 {
 	if len(values) == 0 {
 		return 0
 	}
