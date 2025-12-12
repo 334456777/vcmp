@@ -1,3 +1,19 @@
+// vcmp 是一个视频静态场景检测工具。
+// 通过逐帧分析视频内容，自动检测出画面静止的片段，并生成 FCPXML 标记文件供 Final Cut Pro X 使用。
+//
+// 工作流程：
+//
+//  1. 首次运行：分析视频文件，生成 .gob 分析数据文件
+//  2. 查看统计：直接运行查看已有 gob 文件的分析结果
+//  3. 导出标记：指定阈值生成 FCPXML 文件
+//
+// 使用方法：
+//
+//	vcmp                                # 分析视频生成gob或显示gob统计
+//	vcmp <threshold>                    # 使用gob生成FCPXML (阈值)
+//	vcmp <threshold> <min_duration>     # 指定阈值和最小持续时间(秒)
+//
+// 程序会自动检测当前目录下的视频文件（.mp4、.mov 等）或 .gob 分析文件并进行处理。
 package main
 
 import (
@@ -18,63 +34,90 @@ import (
 )
 
 // ---------------------------------------------------------
-// Constants
+// 常量定义
 // ---------------------------------------------------------
 
 const (
-	MarkerStartPrefix      = "start"
-	MarkerStopPrefix       = "stop"
-	CropIgnoreRatio        = 65.0 / 1080.0
-	ProgressBarWidth       = 30
+	// MarkerStartPrefix 是 FCPXML 中起始标记的前缀
+	MarkerStartPrefix = "start"
+
+	// MarkerStopPrefix 是 FCPXML 中结束标记的前缀
+	MarkerStopPrefix = "stop"
+
+	// CropIgnoreRatio 定义裁剪掉画面底部的比例
+	// 用于排除硬编码字幕或水印区域，避免干扰静态检测
+	CropIgnoreRatio = 65.0 / 1080.0
+
+	// ProgressBarWidth 定义进度条的字符宽度
+	ProgressBarWidth = 30
+
+	// ProgressUpdateInterval 定义每隔多少帧更新一次进度条显示
 	ProgressUpdateInterval = 30
-	DefaultMinDurationSec  = 20.0
-	BinaryThreshold        = 25
-	FrameBufferSize        = 10
-	percentile             = 95.0
+
+	// DefaultMinDurationSec 是判定为静态片段的默认最小持续时间（秒）
+	DefaultMinDurationSec = 20.0
+
+	// BinaryThreshold 是帧差二值化的阈值
+	// 像素差异超过此值才被认为是运动
+	BinaryThreshold = 25
+
+	// FrameBufferSize 定义帧缓冲区大小，用于并发处理
+	FrameBufferSize = 10
+
+	// percentile 定义用于计算建议阈值的百分位数
+	percentile = 95.0
+
+	// DefaultThresholdFactor 是百分位值的倍数系数
+	// 建议阈值 = P95 × 1.5
 	DefaultThresholdFactor = 1.5
 )
 
 // ---------------------------------------------------------
-// Core Domain Types
+// 核心领域类型
 // ---------------------------------------------------------
 
+// DecodedFrame 表示一个已解码的视频帧及其元数据
 type DecodedFrame struct {
-	Frame       gocv.Mat
-	FrameNum    int
-	IsLastFrame bool
+	Frame       gocv.Mat // 解码后的帧矩阵
+	FrameNum    int      // 帧序号（从1开始）
+	IsLastFrame bool     // 是否为最后一帧（用作哨兵值）
 }
 
+// AnalysisResult 保存视频分析的完整结果
 type AnalysisResult struct {
-	VideoFile          string
-	FPS                float64
-	Width              int
-	Height             int
-	TotalFrames        int
-	SuggestedThreshold float64
-	DiffCounts         []uint32
+	VideoFile          string   // 被分析的视频文件路径
+	FPS                float64  // 视频帧率
+	Width              int      // 视频宽度（像素）
+	Height             int      // 视频高度（像素）
+	TotalFrames        int      // 视频总帧数
+	SuggestedThreshold float64  // 自动计算的建议阈值
+	DiffCounts         []uint32 // 每一帧的差异像素数量
 }
 
+// StaticSegment 表示一个连续的静态片段
 type StaticSegment struct {
-	StartFrame     int
-	DurationFrames int
+	StartFrame     int // 起始帧号（从1开始）
+	DurationFrames int // 片段持续帧数
 }
 
+// VideoMetadata 保存视频文件的基本元数据
 type VideoMetadata struct {
-	FPS         float64
-	Width       int
-	Height      int
-	TotalFrames int
-	FilePath    string
+	FPS         float64 // 帧率
+	Width       int     // 宽度（像素）
+	Height      int     // 高度（像素）
+	TotalFrames int     // 总帧数
+	FilePath    string  // 文件路径
 }
 
+// ThresholdConfig 包含阈值计算的配置参数
 type ThresholdConfig struct {
-	Factor         float64
-	Percentile     float64
-	MinDurationSec float64
+	Factor         float64 // 百分位值的倍数系数
+	Percentile     float64 // 百分位数（0-100）
+	MinDurationSec float64 // 有效片段的最小持续秒数
 }
 
 // ---------------------------------------------------------
-// Entry Point
+// 入口点
 // ---------------------------------------------------------
 
 func main() {
@@ -108,9 +151,11 @@ func main() {
 }
 
 // ---------------------------------------------------------
-// Command Routing
+// 命令路由
 // ---------------------------------------------------------
 
+// routeCommand 根据输入类型和参数决定执行路径
+// 支持三种模式：视频分析、gob统计查看、FCPXML生成
 func routeCommand(inputPath string, isGobInput bool, threshold, minDuration float64) error {
 	if isGobInput && threshold >= 0 {
 		return handleGobToFCPXML(inputPath, threshold, minDuration)
@@ -123,6 +168,9 @@ func routeCommand(inputPath string, isGobInput bool, threshold, minDuration floa
 	return handleVideoAnalysis(inputPath)
 }
 
+// detectInputFile 在当前目录搜索 gob 文件或视频文件
+// 优先查找 gob 文件，找不到则查找视频文件
+// 返回文件路径和是否为 gob 文件的标识
 func detectInputFile() (string, bool) {
 	foundGob := findGobInCurrentDir()
 	if foundGob != "" {
@@ -137,6 +185,7 @@ func detectInputFile() (string, bool) {
 	return "", false
 }
 
+// printUsageAndExit 打印使用说明并退出程序
 func printUsageAndExit() {
 	fmt.Println("错误: 当前目录未找到 Gob 或视频文件")
 	fmt.Println()
@@ -149,9 +198,11 @@ func printUsageAndExit() {
 }
 
 // ---------------------------------------------------------
-// High-Level Handlers
+// 高层处理
 // ---------------------------------------------------------
 
+// handleVideoAnalysis 执行视频分析并将结果保存为 gob 文件
+// 这是首次处理视频时的入口点
 func handleVideoAnalysis(videoPath string) error {
 	fmt.Printf(">> 分析视频: %s\n", videoPath)
 
@@ -169,6 +220,8 @@ func handleVideoAnalysis(videoPath string) error {
 	return nil
 }
 
+// handleGobToFCPXML 从 gob 文件加载分析数据并生成 FCPXML 文件
+// 这是生成最终标记文件的入口点
 func handleGobToFCPXML(gobPath string, diffCountThreshold, minDurationSec float64) error {
 	fmt.Printf(">> 加载分析数据: %s\n", gobPath)
 
@@ -205,6 +258,8 @@ func handleGobToFCPXML(gobPath string, diffCountThreshold, minDurationSec float6
 	return nil
 }
 
+// handleGobAnalysis 从 gob 文件加载并显示分析统计结果
+// 用于查看已分析视频的统计信息，无需重新分析
 func handleGobAnalysis(gobPath string) error {
 	fmt.Printf(">> 加载分析数据: %s\n", gobPath)
 
@@ -218,9 +273,10 @@ func handleGobAnalysis(gobPath string) error {
 }
 
 // ---------------------------------------------------------
-// Analysis Results Display (提取的公共函数)
+// 分析结果显示
 // ---------------------------------------------------------
 
+// printAnalysisResults 显示分析结果，包括建议阈值和片段时长分布
 func printAnalysisResults(result *AnalysisResult, factor float64) {
 	config := ThresholdConfig{
 		Factor:         factor,
@@ -234,18 +290,22 @@ func printAnalysisResults(result *AnalysisResult, factor float64) {
 	fmt.Printf("\n阈值为 P%.0f * %.1f = %.0f 时的连续静止时间分布:\n",
 		config.Percentile, config.Factor, threshold)
 	printSegmentDurationDistribution(segments, result.FPS)
-	// fmt.Printf("生成FCPXML请使用: vcmp <threshold> [min_duration]\n")
 }
 
+// calculateSuggestedThreshold 基于百分位数和系数计算建议阈值
+// 使用 P95 * 1.5 作为默认策略，可以过滤掉大部分正常的画面抖动
 func calculateSuggestedThreshold(diffCounts []uint32, config ThresholdConfig) float64 {
 	percentileValue := computePercentile(diffCounts, config.Percentile)
 	return math.Round(percentileValue * config.Factor)
 }
 
 // ---------------------------------------------------------
-// Video Analysis Core
+// 视频分析核心
 // ---------------------------------------------------------
 
+// analyzeVideo 对视频进行逐帧分析，检测画面运动
+// 使用帧差法：比较相邻帧的灰度图差异，统计变化像素数量
+// 返回包含每帧差异计数的分析结果
 func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 	video, err := gocv.VideoCaptureFileWithAPI(videoPath, gocv.VideoCaptureAVFoundation)
 	if err != nil {
@@ -264,7 +324,6 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 
 	diffCounts := processFrames(frameChan, matPool, metadata.Width, cropHeight, metadata.TotalFrames)
 
-	// 计算推荐阈值 (P95 * 1.5)
 	config := ThresholdConfig{
 		Factor:         DefaultThresholdFactor,
 		Percentile:     percentile,
@@ -283,6 +342,7 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 	}, nil
 }
 
+// extractVideoMetadata 从已打开的视频对象中提取元数据
 func extractVideoMetadata(video *gocv.VideoCapture, filePath string) VideoMetadata {
 	return VideoMetadata{
 		FPS:         video.Get(gocv.VideoCaptureFPS),
@@ -293,6 +353,9 @@ func extractVideoMetadata(video *gocv.VideoCapture, filePath string) VideoMetada
 	}
 }
 
+// calculateCropHeight 根据忽略比例计算裁剪高度
+// 裁剪掉画面底部区域（通常是字幕），避免字幕变化影响静态检测
+// 如果裁剪后高度小于原高度的一半，则不进行裁剪
 func calculateCropHeight(height int) int {
 	bottomMaskHeight := int(float64(height) * CropIgnoreRatio)
 	cropHeight := height - bottomMaskHeight
@@ -302,6 +365,8 @@ func calculateCropHeight(height int) int {
 	return cropHeight
 }
 
+// createMatPool 创建 Mat 对象池用于帧缓冲
+// 预分配固定数量的 Mat 对象，减少运行时的内存分配开销
 func createMatPool(size int) chan gocv.Mat {
 	pool := make(chan gocv.Mat, size)
 	for i := 0; i < size; i++ {
@@ -310,6 +375,7 @@ func createMatPool(size int) chan gocv.Mat {
 	return pool
 }
 
+// closeMatPool 关闭 Mat 对象池并释放所有资源
 func closeMatPool(pool chan gocv.Mat) {
 	close(pool)
 	for m := range pool {
@@ -317,6 +383,13 @@ func closeMatPool(pool chan gocv.Mat) {
 	}
 }
 
+// processFrames 处理解码后的帧序列，计算每帧的差异像素数
+// 核心算法：
+//  1. 将当前帧转为灰度图
+//  2. 与前一帧做绝对差值
+//  3. 二值化处理（阈值25）
+//  4. 形态学腐蚀去噪
+//  5. 统计非零像素数
 func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, cropHeight, totalFrames int) []uint32 {
 	diffCounts := make([]uint32, 0, totalFrames)
 
@@ -373,6 +446,9 @@ func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, 
 	return diffCounts
 }
 
+// frameProducer 在独立 goroutine 中读取视频帧
+// 从视频中解码帧并通过 channel 发送给处理函数
+// 尝试从对象池获取 Mat，池满时创建新对象
 func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matBuffer chan gocv.Mat) {
 	defer close(frameChan)
 
@@ -423,6 +499,9 @@ func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matB
 // Segment Generation
 // ---------------------------------------------------------
 
+// generateStaticSegments 从差异计数数据中识别静态片段
+// 当连续多帧的差异像素数低于阈值时，认为是静态片段
+// 只返回持续时间达到最小要求的片段
 func generateStaticSegments(diffCounts []uint32, diffCountThreshold float64, minDurationSec float64, fps float64) []StaticSegment {
 	if len(diffCounts) == 0 {
 		return nil
@@ -460,6 +539,8 @@ func generateStaticSegments(diffCounts []uint32, diffCountThreshold float64, min
 	return segments
 }
 
+// createSegmentIfValid 创建静态片段（如果满足最小时长要求）
+// 返回 nil 表示片段时长不足，不应被记录
 func createSegmentIfValid(startFrame, endFrame int, fps, minDurationSec float64) *StaticSegment {
 	durationFrames := endFrame - startFrame
 	durationSeconds := float64(durationFrames) / fps
@@ -474,9 +555,12 @@ func createSegmentIfValid(startFrame, endFrame int, fps, minDurationSec float64)
 }
 
 // ---------------------------------------------------------
-// FCPXML Generation
+// FCPXML 生成
 // ---------------------------------------------------------
 
+// generateFCPXML 根据检测到的静态片段生成 FCPXML 标记文件
+// FCPXML 是 Final Cut Pro X 的项目文件格式
+// 生成的文件包含在时间线上标记静态片段起止点的 marker
 func generateFCPXML(segments []StaticSegment, meta VideoMetadata, outputPath string) error {
 	formatID := "r1"
 	frameDuration := getFrameDuration(meta.FPS)
@@ -529,6 +613,8 @@ func generateFCPXML(segments []StaticSegment, meta VideoMetadata, outputPath str
 	return writeFCPXMLFile(outputPath, fcpxml)
 }
 
+// createMarkers 为每个静态片段创建开始和结束标记
+// 标记命名格式：start1/stop1, start2/stop2, ...
 func createMarkers(segments []StaticSegment, fps float64) []Marker {
 	markers := make([]Marker, 0, len(segments)*2)
 
@@ -552,6 +638,7 @@ func createMarkers(segments []StaticSegment, fps float64) []Marker {
 	return markers
 }
 
+// writeFCPXMLFile 将 FCPXML 结构体序列化为格式化的 XML 文件
 func writeFCPXMLFile(outputPath string, fcpxml FCPXML) error {
 	file, err := os.Create(outputPath)
 	if err != nil {
@@ -573,9 +660,11 @@ func writeFCPXMLFile(outputPath string, fcpxml FCPXML) error {
 }
 
 // ---------------------------------------------------------
-// File Naming
+// 文件命名
 // ---------------------------------------------------------
 
+// generateGobFilename 根据视频文件名生成 gob 文件名
+// 例如：video.mp4 -> video.gob
 func generateGobFilename(videoPath string) string {
 	baseName := filepath.Base(videoPath)
 	ext := filepath.Ext(baseName)
@@ -583,6 +672,8 @@ func generateGobFilename(videoPath string) string {
 	return fmt.Sprintf("%s.gob", nameWithoutExt)
 }
 
+// generateFCPXMLFilename 根据视频文件名和阈值生成 FCPXML 文件名
+// 例如：video.mp4, threshold=1000 -> video_threshold_1000.fcpxml
 func generateFCPXMLFilename(videoPath string, threshold float64) string {
 	baseName := filepath.Base(videoPath)
 	ext := filepath.Ext(baseName)
@@ -591,9 +682,11 @@ func generateFCPXMLFilename(videoPath string, threshold float64) string {
 }
 
 // ---------------------------------------------------------
-// Data Persistence
+// 数据持久化
 // ---------------------------------------------------------
 
+// SaveToGob 将分析结果序列化并保存为 gzip 压缩的 gob 文件
+// gob 是 Go 的二进制序列化格式，gzip 压缩可减小文件体积
 func (r *AnalysisResult) SaveToGob(outputPath string) error {
 	file, err := os.Create(outputPath)
 	if err != nil {
@@ -612,6 +705,7 @@ func (r *AnalysisResult) SaveToGob(outputPath string) error {
 	return nil
 }
 
+// loadAnalysisFromGob 从 gzip 压缩的 gob 文件加载分析结果
 func loadAnalysisFromGob(filePath string) (*AnalysisResult, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -635,9 +729,11 @@ func loadAnalysisFromGob(filePath string) (*AnalysisResult, error) {
 }
 
 // ---------------------------------------------------------
-// Statistics & Display
+// 统计与显示
 // ---------------------------------------------------------
 
+// printSegmentDurationDistribution 打印静态片段的时长分布统计表
+// 将片段按时长分组（0-1s, 1-3s, 3-7s 等），显示各区间的数量和百分比
 func printSegmentDurationDistribution(segments []StaticSegment, fps float64) {
 	if len(segments) == 0 {
 		fmt.Println("未检测到静态片段")
@@ -662,6 +758,7 @@ func printSegmentDurationDistribution(segments []StaticSegment, fps float64) {
 	printDistributionTable(ranges, counts, len(segments))
 }
 
+// countSegmentsByDuration 统计各时长区间内的片段数量
 func countSegmentsByDuration(segments []StaticSegment, ranges []struct {
 	min, max float64
 	name     string
@@ -683,6 +780,7 @@ func countSegmentsByDuration(segments []StaticSegment, ranges []struct {
 	return counts
 }
 
+// printDistributionTable 打印格式化的分布统计表格
 func printDistributionTable(ranges []struct {
 	min, max float64
 	name     string
@@ -700,6 +798,9 @@ func printDistributionTable(ranges []struct {
 	fmt.Println("└────────────────────────────────────────┘")
 }
 
+// computePercentile 计算数据的百分位数
+// 使用线性插值方法：当百分位数落在两个数据点之间时进行插值计算
+// 例如 P95 表示有 95% 的数据小于等于该值
 func computePercentile(values []uint32, percent float64) float64 {
 	if len(values) == 0 {
 		return 0
@@ -735,6 +836,8 @@ func computePercentile(values []uint32, percent float64) float64 {
 	return float64(ints[lower])*(1.0-frac) + float64(ints[upper])*frac
 }
 
+// updateProgressBar 在控制台显示进度条
+// 使用回车符实现原地更新效果
 func updateProgressBar(current, total int, prefix string) {
 	percentage := float64(current) / float64(total) * 100
 	filled := int(float64(ProgressBarWidth) * float64(current) / float64(total))
@@ -750,9 +853,12 @@ func updateProgressBar(current, total int, prefix string) {
 }
 
 // ---------------------------------------------------------
-// File Discovery
+// 文件发现
 // ---------------------------------------------------------
 
+// findFileWithExtensions 在当前目录查找具有指定扩展名的文件
+// 返回按文件名字母排序的第一个匹配文件
+// 扩展名匹配不区分大小写
 func findFileWithExtensions(extensions []string) string {
 	files, err := os.ReadDir(".")
 	if err != nil {
@@ -779,18 +885,23 @@ func findFileWithExtensions(extensions []string) string {
 	return ""
 }
 
+// findVideoInCurrentDir 在当前目录查找常见格式的视频文件
 func findVideoInCurrentDir() string {
 	return findFileWithExtensions([]string{".mp4", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".m4v", ".mpg", ".mpeg"})
 }
 
+// findGobInCurrentDir 在当前目录查找 .gob 分析数据文件
 func findGobInCurrentDir() string {
 	return findFileWithExtensions([]string{".gob"})
 }
 
 // ---------------------------------------------------------
-// Time Utilities
+// 时间工具
 // ---------------------------------------------------------
 
+// frameToRationalTime 将帧号转换为 FCPXML 的有理数时间格式
+// 正确处理整数帧率和 NTSC 帧率（29.97、23.976 等）
+// NTSC 帧率使用 1001/30000 的倍数表示，以保持精确同步
 func frameToRationalTime(frameNum int, fps float64) string {
 	fpsInt := int(math.Round(fps))
 
@@ -805,6 +916,8 @@ func frameToRationalTime(frameNum int, fps float64) string {
 	return fmt.Sprintf("%d/%ds", frameNum, fpsInt)
 }
 
+// getFrameDuration 返回单帧持续时间的有理数表示
+// 用于 FCPXML 的 frameDuration 属性
 func getFrameDuration(fps float64) string {
 	switch {
 	case math.Abs(fps-29.97) < 0.01:
@@ -822,6 +935,8 @@ func getFrameDuration(fps float64) string {
 	}
 }
 
+// isNTSCRate 判断是否为 NTSC 制式的帧率
+// NTSC 帧率是美国和日本等地区使用的标准，采用非整数帧率
 func isNTSCRate(fps float64) bool {
 	const epsilon = 0.01
 	return math.Abs(fps-29.97) < epsilon ||
@@ -830,9 +945,10 @@ func isNTSCRate(fps float64) bool {
 }
 
 // ---------------------------------------------------------
-// FCPXML Data Structures
+// FCPXML 数据结构
 // ---------------------------------------------------------
 
+// FCPXML 表示 FCPXML 文档的根元素
 type FCPXML struct {
 	XMLName   xml.Name  `xml:"fcpxml"`
 	Version   string    `xml:"version,attr"`
@@ -840,10 +956,12 @@ type FCPXML struct {
 	Library   Library   `xml:"library"`
 }
 
+// Resources 包含 FCPXML 文档使用的资源定义
 type Resources struct {
 	Format Format `xml:"format"`
 }
 
+// Format 定义视频格式属性（分辨率、帧率、色彩空间等）
 type Format struct {
 	ID         string `xml:"id,attr"`
 	Name       string `xml:"name,attr"`
@@ -853,23 +971,27 @@ type Format struct {
 	ColorSpace string `xml:"colorSpace,attr"`
 }
 
+// Library 表示 FCPXML 资源库，包含事件集合
 type Library struct {
 	Location string `xml:"location,attr"`
 	Event    Event  `xml:"event"`
 }
 
+// Event 表示 FCPXML 事件，包含项目集合
 type Event struct {
 	Name    string  `xml:"name,attr"`
 	UID     string  `xml:"uid,attr"`
 	Project Project `xml:"project"`
 }
 
+// Project 表示 FCPXML 项目，包含时间线序列
 type Project struct {
 	Name     string   `xml:"name,attr"`
 	UID      string   `xml:"uid,attr"`
 	Sequence Sequence `xml:"sequence"`
 }
 
+// Sequence 表示 FCPXML 时间线序列，包含主故事线
 type Sequence struct {
 	Duration    string `xml:"duration,attr"`
 	Format      string `xml:"format,attr"`
@@ -880,10 +1002,12 @@ type Sequence struct {
 	Spine       Spine  `xml:"spine"`
 }
 
+// Spine 表示主故事线（Primary Storyline）
 type Spine struct {
 	Gap Gap `xml:"gap"`
 }
 
+// Gap 表示间隙片段，可以包含标记点
 type Gap struct {
 	Name     string   `xml:"name,attr"`
 	Offset   string   `xml:"offset,attr"`
@@ -892,6 +1016,7 @@ type Gap struct {
 	Markers  []Marker `xml:"marker"`
 }
 
+// Marker 表示时间线上的标记点
 type Marker struct {
 	Start    string `xml:"start,attr"`
 	Duration string `xml:"duration,attr"`
