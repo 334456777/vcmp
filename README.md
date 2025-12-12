@@ -175,7 +175,7 @@ make help       # 显示帮助信息
 
 ## 许可证
 
-GPL-3.0 license
+GPL-3.0
 
 ## 贡献
 
