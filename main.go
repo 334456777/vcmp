@@ -384,6 +384,7 @@ func closeMatPool(pool chan gocv.Mat) {
 }
 
 // processFrames 处理解码后的帧序列，计算每帧的差异像素数
+
 // 核心算法：
 //  1. 将当前帧转为灰度图
 //  2. 与前一帧做绝对差值
@@ -393,14 +394,13 @@ func closeMatPool(pool chan gocv.Mat) {
 func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, cropHeight, totalFrames int) []uint32 {
 	diffCounts := make([]uint32, 0, totalFrames)
 
-	currentGray, frameDelta, prevGray, eroded := gocv.NewMat(), gocv.NewMat(), gocv.NewMat(), gocv.NewMat()
+	currentGray, prevGray, workBuffer := gocv.NewMat(), gocv.NewMat(), gocv.NewMat()
 	kernel := gocv.GetStructuringElement(gocv.MorphRect, image.Point{X: 3, Y: 3})
 
 	defer func() {
 		currentGray.Close()
-		frameDelta.Close()
 		prevGray.Close()
-		eroded.Close()
+		workBuffer.Close()
 		kernel.Close()
 	}()
 
@@ -418,11 +418,11 @@ func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, 
 		currentROI_BGR.Close()
 
 		if !prevGray.Empty() {
-			gocv.AbsDiff(currentGray, prevGray, &frameDelta)
-			gocv.Threshold(frameDelta, &frameDelta, BinaryThreshold, 255, gocv.ThresholdBinary)
-			gocv.Erode(frameDelta, &eroded, kernel)
+			gocv.AbsDiff(currentGray, prevGray, &workBuffer)
+			gocv.Threshold(workBuffer, &workBuffer, BinaryThreshold, 255, gocv.ThresholdBinary)
+			gocv.Erode(workBuffer, &workBuffer, kernel)
 
-			diffCount := gocv.CountNonZero(eroded)
+			diffCount := gocv.CountNonZero(workBuffer)
 			diffCounts = append(diffCounts, uint32(diffCount))
 		}
 
