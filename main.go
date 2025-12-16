@@ -62,7 +62,7 @@ const (
 	BinaryThreshold = 25
 
 	// FrameBufferSize 定义帧缓冲区大小，用于并发处理
-	FrameBufferSize = 10
+	FrameBufferSize = 5
 
 	// percentile 定义用于计算建议阈值的百分位数
 	percentile = 95.0
