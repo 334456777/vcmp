@@ -100,22 +100,6 @@ type StaticSegment struct {
 	DurationFrames int // 片段持续帧数
 }
 
-// VideoMetadata 保存视频文件的基本元数据
-type VideoMetadata struct {
-	FPS         float64 // 帧率
-	Width       int     // 宽度（像素）
-	Height      int     // 高度（像素）
-	TotalFrames int     // 总帧数
-	FilePath    string  // 文件路径
-}
-
-// ThresholdConfig 包含阈值计算的配置参数
-type ThresholdConfig struct {
-	Factor         float64 // 百分位值的倍数系数
-	Percentile     float64 // 百分位数（0-100）
-	MinDurationSec float64 // 有效片段的最小持续秒数
-}
-
 // ---------------------------------------------------------
 // 入口点
 // ---------------------------------------------------------
@@ -216,7 +200,7 @@ func handleVideoAnalysis(videoPath string) error {
 		return fmt.Errorf("保存Gob失败: %w", err)
 	}
 
-	printAnalysisResults(result, DefaultThresholdFactor)
+	printAnalysisResults(result)
 	return nil
 }
 
@@ -240,12 +224,12 @@ func handleGobToFCPXML(gobPath string, diffCountThreshold, minDurationSec float6
 	fmt.Println()
 
 	outputPath := generateFCPXMLFilename(result.VideoFile, diffCountThreshold)
-	meta := VideoMetadata{
+	meta := AnalysisResult {
+		VideoFile:   result.VideoFile,
 		FPS:         result.FPS,
 		Width:       result.Width,
 		Height:      result.Height,
 		TotalFrames: result.TotalFrames,
-		FilePath:    result.VideoFile,
 	}
 
 	if err := generateFCPXML(segments, meta, outputPath); err != nil {
@@ -268,7 +252,7 @@ func handleGobAnalysis(gobPath string) error {
 		return fmt.Errorf("加载Gob失败: %w", err)
 	}
 
-	printAnalysisResults(result, DefaultThresholdFactor)
+	printAnalysisResults(result)
 	return nil
 }
 
@@ -277,26 +261,19 @@ func handleGobAnalysis(gobPath string) error {
 // ---------------------------------------------------------
 
 // printAnalysisResults 显示分析结果，包括建议阈值和片段时长分布
-func printAnalysisResults(result *AnalysisResult, factor float64) {
-	config := ThresholdConfig{
-		Factor:         factor,
-		Percentile:     percentile,
-		MinDurationSec: 0.0,
-	}
+func printAnalysisResults(result *AnalysisResult) {
+	threshold := result.SuggestedThreshold
+	segments := generateStaticSegments(result.DiffCounts, threshold, 0.0, result.FPS)
 
-	threshold := calculateSuggestedThreshold(result.DiffCounts, config)
-	segments := generateStaticSegments(result.DiffCounts, threshold, config.MinDurationSec, result.FPS)
-
-	fmt.Printf("\n阈值为 P%.0f * %.1f = %.0f 时的连续静止区间分布:\n",
-		config.Percentile, config.Factor, threshold)
+	fmt.Printf("\n阈值为 %.0f 时的连续静止区间分布:\n", threshold)
 	printSegmentDurationDistribution(segments, result.FPS)
 }
 
 // calculateSuggestedThreshold 基于百分位数和系数计算建议阈值
 // 使用 P95 * 1.5 作为默认策略，可以过滤掉大部分正常的画面抖动
-func calculateSuggestedThreshold(diffCounts []uint32, config ThresholdConfig) float64 {
-	percentileValue := computePercentile(diffCounts, config.Percentile)
-	return math.Round(percentileValue * config.Factor)
+func calculateSuggestedThreshold(diffCounts []uint32) float64 {
+	percentileValue := computePercentile(diffCounts, percentile)
+	return math.Round(percentileValue * DefaultThresholdFactor)
 }
 
 // ---------------------------------------------------------
@@ -324,14 +301,9 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 
 	diffCounts := processFrames(frameChan, matPool, metadata.Width, cropHeight, metadata.TotalFrames)
 
-	config := ThresholdConfig{
-		Factor:         DefaultThresholdFactor,
-		Percentile:     percentile,
-		MinDurationSec: 0.0,
-	}
-	suggestedThreshold := calculateSuggestedThreshold(diffCounts, config)
+	suggestedThreshold := calculateSuggestedThreshold(diffCounts)
 
-	return &AnalysisResult{
+	return &AnalysisResult {
 		VideoFile:          videoPath,
 		FPS:                metadata.FPS,
 		Width:              metadata.Width,
@@ -343,13 +315,13 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 }
 
 // extractVideoMetadata 从已打开的视频对象中提取元数据
-func extractVideoMetadata(video *gocv.VideoCapture, filePath string) VideoMetadata {
-	return VideoMetadata{
+func extractVideoMetadata(video *gocv.VideoCapture, filePath string) AnalysisResult {
+	return AnalysisResult {
+		VideoFile:   filePath,
 		FPS:         video.Get(gocv.VideoCaptureFPS),
 		Width:       int(video.Get(gocv.VideoCaptureFrameWidth)),
 		Height:      int(video.Get(gocv.VideoCaptureFrameHeight)),
 		TotalFrames: int(video.Get(gocv.VideoCaptureFrameCount)),
-		FilePath:    filePath,
 	}
 }
 
@@ -496,7 +468,7 @@ func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matB
 }
 
 // ---------------------------------------------------------
-// Segment Generation
+// 静态片段生成
 // ---------------------------------------------------------
 
 // generateStaticSegments 从差异计数数据中识别静态片段
@@ -561,7 +533,7 @@ func createSegmentIfValid(startFrame, endFrame int, fps, minDurationSec float64)
 // generateFCPXML 根据检测到的静态片段生成 FCPXML 标记文件
 // FCPXML 是 Final Cut Pro X 的项目文件格式
 // 生成的文件包含在时间线上标记静态片段起止点的 marker
-func generateFCPXML(segments []StaticSegment, meta VideoMetadata, outputPath string) error {
+func generateFCPXML(segments []StaticSegment, meta AnalysisResult, outputPath string) error {
 	formatID := "r1"
 	frameDuration := getFrameDuration(meta.FPS)
 	totalDuration := frameToRationalTime(meta.TotalFrames, meta.FPS)
