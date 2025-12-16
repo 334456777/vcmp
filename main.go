@@ -287,7 +287,7 @@ func printAnalysisResults(result *AnalysisResult, factor float64) {
 	threshold := calculateSuggestedThreshold(result.DiffCounts, config)
 	segments := generateStaticSegments(result.DiffCounts, threshold, config.MinDurationSec, result.FPS)
 
-	fmt.Printf("\n阈值为 P%.0f * %.1f = %.0f 时的连续静止时间分布:\n",
+	fmt.Printf("\n阈值为 P%.0f * %.1f = %.0f 时的连续静止区间分布:\n",
 		config.Percentile, config.Factor, threshold)
 	printSegmentDurationDistribution(segments, result.FPS)
 }
