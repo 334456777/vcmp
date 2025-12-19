@@ -270,7 +270,7 @@ func printAnalysisResults(result *AnalysisResult) {
 }
 
 // calculateSuggestedThreshold 基于百分位数和系数计算建议阈值
-// 使用 P95 * 1.5 作为默认策略，可以过滤掉大部分正常的画面抖动
+// 使用 percentileValue * DefaultThresholdFactor 作为默认策略，可以过滤掉大部分正常的画面抖动
 func calculateSuggestedThreshold(diffCounts []uint32) float64 {
 	percentileValue := computePercentile(diffCounts, percentile)
 	return math.Round(percentileValue * DefaultThresholdFactor)
