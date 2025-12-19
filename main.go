@@ -44,9 +44,12 @@ const (
 	// MarkerStopPrefix 是 FCPXML 中结束标记的前缀
 	MarkerStopPrefix = "stop"
 
-	// CropIgnoreRatio 定义裁剪掉画面底部的比例
+	// CropIgnoreNumerator 定义裁剪掉画面底部的分子
+	CropIgnoreNumerator = 65
+
+	// CropIgnoreDenominator 定义裁剪掉画面底部的分母
 	// 用于排除硬编码字幕或水印区域，避免干扰静态检测
-	CropIgnoreRatio = 65.0 / 1080.0
+	CropIgnoreDenominator = 1080
 
 	// ProgressBarWidth 定义进度条的字符宽度
 	ProgressBarWidth = 30
@@ -197,7 +200,7 @@ func handleVideoAnalysis(videoPath string) error {
 
 	outputPath := generateGobFilename(videoPath)
 	if err := result.SaveToGob(outputPath); err != nil {
-		return fmt.Errorf("保存Gob失败: %w", err)
+		return fmt.Errorf("保存Gob文件失败 (%s): %w", outputPath, err)
 	}
 
 	printAnalysisResults(result)
@@ -211,7 +214,7 @@ func handleGobToFCPXML(gobPath string, diffCountThreshold, minDurationSec float6
 
 	result, err := loadAnalysisFromGob(gobPath)
 	if err != nil {
-		return fmt.Errorf("加载Gob失败: %w", err)
+		return fmt.Errorf("加载Gob文件失败 (%s): %w", gobPath, err)
 	}
 
 	segments := generateStaticSegments(result.DiffCounts, diffCountThreshold, minDurationSec, result.FPS)
@@ -224,7 +227,7 @@ func handleGobToFCPXML(gobPath string, diffCountThreshold, minDurationSec float6
 	fmt.Println()
 
 	outputPath := generateFCPXMLFilename(result.VideoFile, diffCountThreshold)
-	meta := AnalysisResult {
+	meta := AnalysisResult{
 		VideoFile:   result.VideoFile,
 		FPS:         result.FPS,
 		Width:       result.Width,
@@ -233,7 +236,7 @@ func handleGobToFCPXML(gobPath string, diffCountThreshold, minDurationSec float6
 	}
 
 	if err := generateFCPXML(segments, meta, outputPath); err != nil {
-		return fmt.Errorf("生成FCPXML失败: %w", err)
+		return fmt.Errorf("生成FCPXML文件失败 (%s): %w", outputPath, err)
 	}
 
 	fmt.Printf("✓  FCPXML已生成 -> %s\n", outputPath)
@@ -249,7 +252,7 @@ func handleGobAnalysis(gobPath string) error {
 
 	result, err := loadAnalysisFromGob(gobPath)
 	if err != nil {
-		return fmt.Errorf("加载Gob失败: %w", err)
+		return fmt.Errorf("加载Gob文件失败 (%s): %w", gobPath, err)
 	}
 
 	printAnalysisResults(result)
@@ -303,7 +306,7 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 
 	suggestedThreshold := calculateSuggestedThreshold(diffCounts)
 
-	return &AnalysisResult {
+	return &AnalysisResult{
 		VideoFile:          videoPath,
 		FPS:                metadata.FPS,
 		Width:              metadata.Width,
@@ -316,7 +319,7 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 
 // extractVideoMetadata 从已打开的视频对象中提取元数据
 func extractVideoMetadata(video *gocv.VideoCapture, filePath string) AnalysisResult {
-	return AnalysisResult {
+	return AnalysisResult{
 		VideoFile:   filePath,
 		FPS:         video.Get(gocv.VideoCaptureFPS),
 		Width:       int(video.Get(gocv.VideoCaptureFrameWidth)),
@@ -329,7 +332,7 @@ func extractVideoMetadata(video *gocv.VideoCapture, filePath string) AnalysisRes
 // 裁剪掉画面底部区域（通常是字幕），避免字幕变化影响静态检测
 // 如果裁剪后高度小于原高度的一半，则不进行裁剪
 func calculateCropHeight(height int) int {
-	bottomMaskHeight := int(float64(height) * CropIgnoreRatio)
+	bottomMaskHeight := height * CropIgnoreNumerator / CropIgnoreDenominator
 	cropHeight := height - bottomMaskHeight
 	if cropHeight < height/2 {
 		return height
@@ -378,7 +381,6 @@ func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, 
 
 	for decodedFrame := range frameChan {
 		if decodedFrame.IsLastFrame {
-			decodedFrame.Frame.Close()
 			break
 		}
 
@@ -424,6 +426,9 @@ func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, 
 func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matBuffer chan gocv.Mat) {
 	defer close(frameChan)
 
+	sentinelMat := gocv.NewMat()
+	defer sentinelMat.Close()
+
 	frameNum := 0
 
 	for {
@@ -461,7 +466,7 @@ func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matB
 	}
 
 	frameChan <- DecodedFrame{
-		Frame:       gocv.NewMat(),
+		Frame:       sentinelMat,
 		FrameNum:    frameNum,
 		IsLastFrame: true,
 	}
@@ -778,22 +783,25 @@ func computePercentile(values []uint32, percent float64) float64 {
 		return 0
 	}
 
-	ints := make([]int, len(values))
-	for i, v := range values {
-		ints[i] = int(v)
-	}
-	sort.Ints(ints)
+	// 复制一份避免修改原数据
+	sorted := make([]uint32, len(values))
+	copy(sorted, values)
 
-	n := len(ints)
+	// 使用 sort.Slice 直接排序 uint32
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i] < sorted[j]
+	})
+
+	n := len(sorted)
 	if n == 1 {
-		return float64(ints[0])
+		return float64(sorted[0])
 	}
 
 	if percent <= 0 {
-		return float64(ints[0])
+		return float64(sorted[0])
 	}
 	if percent >= 100 {
-		return float64(ints[n-1])
+		return float64(sorted[n-1])
 	}
 
 	rank := percent / 100.0 * (float64(n) - 1.0)
@@ -801,11 +809,11 @@ func computePercentile(values []uint32, percent float64) float64 {
 	upper := int(math.Ceil(rank))
 
 	if lower == upper {
-		return float64(ints[lower])
+		return float64(sorted[lower])
 	}
 
 	frac := rank - float64(lower)
-	return float64(ints[lower])*(1.0-frac) + float64(ints[upper])*frac
+	return float64(sorted[lower])*(1.0-frac) + float64(sorted[upper])*frac
 }
 
 // updateProgressBar 在控制台显示进度条
@@ -814,10 +822,20 @@ func updateProgressBar(current, total int, prefix string) {
 	percentage := float64(current) / float64(total) * 100
 	filled := int(float64(ProgressBarWidth) * float64(current) / float64(total))
 
-	bar := strings.Repeat("=", filled)
-	empty := strings.Repeat(".", ProgressBarWidth-filled)
+	// 预分配 buffer
+	var buf strings.Builder
+	buf.Grow(len(prefix) + ProgressBarWidth + 20)
 
-	fmt.Printf("\r%s [%s>%s] %.1f%%", prefix, bar, empty, percentage)
+	buf.WriteString("\r")
+	buf.WriteString(prefix)
+	buf.WriteString(" [")
+	buf.WriteString(strings.Repeat("=", filled))
+	buf.WriteByte('>')
+	buf.WriteString(strings.Repeat(".", ProgressBarWidth-filled))
+	buf.WriteString("] ")
+	fmt.Fprintf(&buf, "%.1f%%", percentage)
+
+	fmt.Print(buf.String())
 
 	if current >= total {
 		fmt.Println()
