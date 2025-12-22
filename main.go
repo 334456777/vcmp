@@ -112,7 +112,7 @@ func main() {
 	args := flag.Args()
 
 	var diffCountThreshold float64 = -1
-	var minDurationSec float64 = DefaultMinDurationSec
+	minDurationSec := DefaultMinDurationSec
 
 	if len(args) > 0 {
 		if val, err := strconv.ParseFloat(args[0], 64); err == nil {
@@ -291,7 +291,7 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("打开视频失败: %w", err)
 	}
-	defer video.Close()
+	defer func() { _ = video.Close() }()
 
 	metadata := extractVideoMetadata(video, videoPath)
 	cropHeight := calculateCropHeight(metadata.Height)
@@ -302,7 +302,10 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 	frameChan := make(chan DecodedFrame, FrameBufferSize)
 	go frameProducer(video, frameChan, matPool)
 
-	diffCounts := processFrames(frameChan, matPool, metadata.Width, cropHeight, metadata.TotalFrames)
+	diffCounts, err := processFrames(frameChan, matPool, metadata.Width, cropHeight, metadata.TotalFrames)
+	if err != nil {
+		return nil, fmt.Errorf("处理帧失败: %w", err)
+	}
 
 	suggestedThreshold := calculateSuggestedThreshold(diffCounts)
 
@@ -354,7 +357,7 @@ func createMatPool(size int) chan gocv.Mat {
 func closeMatPool(pool chan gocv.Mat) {
 	close(pool)
 	for m := range pool {
-		m.Close()
+		_ = m.Close()
 	}
 }
 
@@ -366,17 +369,17 @@ func closeMatPool(pool chan gocv.Mat) {
 //  3. 二值化处理（阈值25）
 //  4. 形态学腐蚀去噪
 //  5. 统计非零像素数
-func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, cropHeight, totalFrames int) []uint32 {
+func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, cropHeight, totalFrames int) ([]uint32, error) {
 	diffCounts := make([]uint32, 0, totalFrames)
 
 	currentGray, prevGray, workBuffer := gocv.NewMat(), gocv.NewMat(), gocv.NewMat()
 	kernel := gocv.GetStructuringElement(gocv.MorphRect, image.Point{X: 3, Y: 3})
 
 	defer func() {
-		currentGray.Close()
-		prevGray.Close()
-		workBuffer.Close()
-		kernel.Close()
+		_ = currentGray.Close()
+		_ = prevGray.Close()
+		_ = workBuffer.Close()
+		_ = kernel.Close()
 	}()
 
 	for decodedFrame := range frameChan {
@@ -387,25 +390,34 @@ func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, 
 		img := decodedFrame.Frame
 		frameNum := decodedFrame.FrameNum
 
-		currentROI_BGR := img.Region(image.Rect(0, 0, width, cropHeight))
-		gocv.CvtColor(currentROI_BGR, &currentGray, gocv.ColorBGRToGray)
-		currentROI_BGR.Close()
+		currentBgr := img.Region(image.Rect(0, 0, width, cropHeight))
+		if err := gocv.CvtColor(currentBgr, &currentGray, gocv.ColorBGRToGray); err != nil {
+			_ = currentBgr.Close()
+			return nil, fmt.Errorf("frame %d CvtColor failed: %w", frameNum, err)
+		}
+		_ = currentBgr.Close()
 
 		if !prevGray.Empty() {
-			gocv.AbsDiff(currentGray, prevGray, &workBuffer)
+			if err := gocv.AbsDiff(currentGray, prevGray, &workBuffer); err != nil {
+				return nil, fmt.Errorf("frame %d AbsDiff failed: %w", frameNum, err)
+			}
 			gocv.Threshold(workBuffer, &workBuffer, BinaryThreshold, 255, gocv.ThresholdBinary)
-			gocv.Erode(workBuffer, &workBuffer, kernel)
+			if err := gocv.Erode(workBuffer, &workBuffer, kernel); err != nil {
+				return nil, fmt.Errorf("frame %d Erode failed: %w", frameNum, err)
+			}
 
 			diffCount := gocv.CountNonZero(workBuffer)
 			diffCounts = append(diffCounts, uint32(diffCount))
 		}
 
-		currentGray.CopyTo(&prevGray)
+		if err := currentGray.CopyTo(&prevGray); err != nil {
+			return nil, fmt.Errorf("frame %d CopyTo failed: %w", frameNum, err)
+		}
 
 		select {
 		case matPool <- img:
 		default:
-			img.Close()
+			_ = img.Close()
 		}
 
 		if frameNum%ProgressUpdateInterval == 0 {
@@ -417,7 +429,7 @@ func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, 
 		updateProgressBar(totalFrames, totalFrames, ">> 分析中")
 	}
 
-	return diffCounts
+	return diffCounts, nil
 }
 
 // frameProducer 在独立 goroutine 中读取视频帧
@@ -427,7 +439,7 @@ func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matB
 	defer close(frameChan)
 
 	sentinelMat := gocv.NewMat()
-	defer sentinelMat.Close()
+	defer func() { _ = sentinelMat.Close() }()
 
 	frameNum := 0
 
@@ -448,10 +460,10 @@ func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matB
 				select {
 				case matBuffer <- matToSend:
 				default:
-					matToSend.Close()
+					_ = matToSend.Close()
 				}
 			} else {
-				matToSend.Close()
+				_ = matToSend.Close()
 			}
 			break
 		}
@@ -621,10 +633,14 @@ func writeFCPXMLFile(outputPath string, fcpxml FCPXML) error {
 	if err != nil {
 		return fmt.Errorf("创建输出文件失败: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
-	file.WriteString(xml.Header)
-	file.WriteString(`<!DOCTYPE fcpxml>` + "\n")
+	if _, err := file.WriteString(xml.Header); err != nil {
+		return fmt.Errorf("写入XML头失败: %w", err)
+	}
+	if _, err := file.WriteString(`<!DOCTYPE fcpxml>` + "\n"); err != nil {
+		return fmt.Errorf("写入DOCTYPE失败: %w", err)
+	}
 
 	encoder := xml.NewEncoder(file)
 	encoder.Indent("", "    ")
@@ -669,17 +685,17 @@ func (r *AnalysisResult) SaveToGob(outputPath string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	gw := gzip.NewWriter(file)
-	defer gw.Close()
 
 	encoder := gob.NewEncoder(gw)
 	if err := encoder.Encode(r); err != nil {
+		_ = gw.Close()
 		return err
 	}
 
-	return nil
+	return gw.Close()
 }
 
 // loadAnalysisFromGob 从 gzip 压缩的 gob 文件加载分析结果
@@ -688,13 +704,13 @@ func loadAnalysisFromGob(filePath string) (*AnalysisResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	gr, err := gzip.NewReader(file)
 	if err != nil {
 		return nil, fmt.Errorf("gzip 读取失败: %w", err)
 	}
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 
 	var result AnalysisResult
 	decoder := gob.NewDecoder(gr)
@@ -833,7 +849,7 @@ func updateProgressBar(current, total int, prefix string) {
 	buf.WriteByte('>')
 	buf.WriteString(strings.Repeat(".", ProgressBarWidth-filled))
 	buf.WriteString("] ")
-	fmt.Fprintf(&buf, "%.1f%%", percentage)
+	_, _ = fmt.Fprintf(&buf, "%.1f%%", percentage)
 
 	fmt.Print(buf.String())
 
