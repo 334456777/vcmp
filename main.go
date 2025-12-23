@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"time"
 	"os"
 	"path/filepath"
 	"sort"
@@ -31,6 +32,7 @@ import (
 	"strings"
 
 	"gocv.io/x/gocv"
+	"github.com/schollz/progressbar/v3"
 )
 
 // ---------------------------------------------------------
@@ -382,6 +384,8 @@ func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, 
 		_ = kernel.Close()
 	}()
 
+	bar := createProgressBar(totalFrames, ">> 分析中")
+
 	for decodedFrame := range frameChan {
 		if decodedFrame.IsLastFrame {
 			break
@@ -420,14 +424,10 @@ func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, 
 			_ = img.Close()
 		}
 
-		if frameNum%ProgressUpdateInterval == 0 {
-			updateProgressBar(frameNum, totalFrames, ">> 分析中")
-		}
+		_ = bar.Add(1)
 	}
 
-	if len(diffCounts) > 0 {
-		updateProgressBar(totalFrames, totalFrames, ">> 分析中")
-	}
+	_ = bar.Finish()
 
 	return diffCounts, nil
 }
@@ -832,30 +832,24 @@ func computePercentile(values []uint32, percent float64) float64 {
 	return float64(sorted[lower])*(1.0-frac) + float64(sorted[upper])*frac
 }
 
-// updateProgressBar 在控制台显示进度条
-// 使用回车符实现原地更新效果
-func updateProgressBar(current, total int, prefix string) {
-	percentage := float64(current) / float64(total) * 100
-	filled := int(float64(ProgressBarWidth) * float64(current) / float64(total))
-
-	// 预分配 buffer
-	var buf strings.Builder
-	buf.Grow(len(prefix) + ProgressBarWidth + 20)
-
-	buf.WriteString("\r")
-	buf.WriteString(prefix)
-	buf.WriteString(" [")
-	buf.WriteString(strings.Repeat("=", filled))
-	buf.WriteByte('>')
-	buf.WriteString(strings.Repeat(".", ProgressBarWidth-filled))
-	buf.WriteString("] ")
-	_, _ = fmt.Fprintf(&buf, "%.1f%%", percentage)
-
-	fmt.Print(buf.String())
-
-	if current >= total {
-		fmt.Println()
-	}
+// createProgressBar 创建并配置进度条
+func createProgressBar(total int, description string) *progressbar.ProgressBar {
+	return progressbar.NewOptions(total,
+		progressbar.OptionSetDescription(description),
+		progressbar.OptionSetWidth(ProgressBarWidth),
+		progressbar.OptionThrottle(65*time.Millisecond),
+		progressbar.OptionShowIts(),
+		progressbar.OptionSetItsString("帧"),
+		progressbar.OptionSetPredictTime(true),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "━",
+			SaucerHead:    "╸",
+			SaucerPadding: " ",
+			BarStart:      "",
+			BarEnd:        "",
+		}),
+		progressbar.OptionOnCompletion(func() {fmt.Println()}),
+	)
 }
 
 // ---------------------------------------------------------
