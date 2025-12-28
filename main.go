@@ -290,13 +290,17 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("打开视频失败: %w", err)
 	}
-	defer func() { _ = video.Close() }()
+	defer func() {
+		_ = video.Close()
+	}()
 
 	metadata := extractVideoMetadata(video, videoPath)
 	cropHeight := calculateCropHeight(metadata.Height)
 
 	matPool := createMatPool(FrameBufferSize + 2)
-	defer closeMatPool(matPool)
+	defer func() {
+		closeMatPool(matPool)
+	}()
 
 	frameChan := make(chan DecodedFrame, FrameBufferSize)
 	go frameProducer(video, frameChan, matPool)
@@ -433,10 +437,14 @@ func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, 
 // 从视频中解码帧并通过 channel 发送给处理函数
 // 尝试从对象池获取 Mat，池满时创建新对象
 func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matBuffer chan gocv.Mat) {
-	defer close(frameChan)
+	defer func() {
+		close(frameChan)
+	}()
 
 	sentinelMat := gocv.NewMat()
-	defer func() { _ = sentinelMat.Close() }()
+	defer func() {
+		_ = sentinelMat.Close()
+	}()
 
 	frameNum := 0
 
@@ -630,7 +638,9 @@ func writeFCPXMLFile(outputPath string, fcpxml FCPXML) error {
 	if err != nil {
 		return fmt.Errorf("创建输出文件失败: %w", err)
 	}
-	defer func() { _ = file.Close() }()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	if _, err := file.WriteString(xml.Header); err != nil {
 		return fmt.Errorf("写入XML头失败: %w", err)
@@ -682,7 +692,9 @@ func (r *AnalysisResult) SaveToGob(outputPath string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = file.Close() }()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	gw := gzip.NewWriter(file)
 
@@ -707,7 +719,9 @@ func loadAnalysisFromGob(filePath string) (*AnalysisResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gzip 读取失败: %w", err)
 	}
-	defer func() { _ = gr.Close() }()
+	defer func() {
+		_ = gr.Close()
+	}()
 
 	var result AnalysisResult
 	decoder := gob.NewDecoder(gr)
