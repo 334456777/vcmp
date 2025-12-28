@@ -63,8 +63,14 @@ const (
 	// 像素差异超过此值才被认为是运动
 	BinaryThreshold = 25
 
-	// FrameBufferSize 定义帧缓冲区大小，用于并发处理
+	// FrameBufferSize 定义帧缓冲区的大小
 	FrameBufferSize = 5
+
+	// ProducerWorkingMat 正在读取的一帧
+	ProducerWorkingMat = 1
+
+	//ConsumerWorkingMat 保留的前一帧
+	ConsumerWorkingMat = 1
 
 	// percentile 定义用于计算建议阈值的百分位数
 	percentile = 95.0
@@ -297,7 +303,7 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 	metadata := extractVideoMetadata(video, videoPath)
 	cropHeight := calculateCropHeight(metadata.Height)
 
-	matPool := createMatPool(FrameBufferSize + 2)
+	matPool := createMatPool(ProducerWorkingMat + FrameBufferSize + ConsumerWorkingMat)
 	defer func() {
 		closeMatPool(matPool)
 	}()
