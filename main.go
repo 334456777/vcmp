@@ -24,15 +24,15 @@ import (
 	"fmt"
 	"image"
 	"math"
-	"time"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
-	"gocv.io/x/gocv"
 	"github.com/schollz/progressbar/v3"
+	"gocv.io/x/gocv"
 )
 
 // ---------------------------------------------------------
@@ -55,9 +55,6 @@ const (
 
 	// ProgressBarWidth 定义进度条的字符宽度
 	ProgressBarWidth = 30
-
-	// ProgressUpdateInterval 定义每隔多少帧更新一次进度条显示
-	ProgressUpdateInterval = 30
 
 	// DefaultMinDurationSec 是判定为静态片段的默认最小持续时间（秒）
 	DefaultMinDurationSec = 20.0
@@ -848,7 +845,7 @@ func createProgressBar(total int, description string) *progressbar.ProgressBar {
 			BarStart:      "",
 			BarEnd:        "",
 		}),
-		progressbar.OptionOnCompletion(func() {fmt.Println()}),
+		progressbar.OptionOnCompletion(func() { fmt.Println() }),
 	)
 }
 
