@@ -70,7 +70,7 @@ const (
 	percentile = 95.0
 
 	// DefaultThresholdFactor 是百分位值的倍数系数
-	// 建议阈值 = P95 × 1.5
+	// 建议阈值 = percentile * DefaultThresholdFactor
 	DefaultThresholdFactor = 1.5
 )
 
