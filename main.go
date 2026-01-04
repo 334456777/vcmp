@@ -3,22 +3,20 @@
 //
 // 工作流程：
 //
-//  1. 首次运行：分析视频文件，生成 .gob 分析数据文件
-//  2. 查看统计：直接运行查看已有 gob 文件的分析结果
+//  1. 首次运行：分析视频文件，生成 .pb.zst 分析数据文件
+//  2. 查看统计：直接运行查看已有 .pb.zst 文件的分析结果
 //  3. 导出标记：指定阈值生成 FCPXML 文件
 //
 // 使用方法：
 //
-//	vcmp                                # 分析视频生成gob或显示gob统计
-//	vcmp <threshold>                    # 使用gob生成FCPXML (阈值)
+//	vcmp                                # 分析视频生成.pb.zst或显示统计
+//	vcmp <threshold>                    # 使用.pb.zst生成FCPXML (阈值)
 //	vcmp <threshold> <min_duration>     # 指定阈值和最小持续时间(秒)
 //
-// 程序会自动检测当前目录下的视频文件（.mp4、.mov 等）或 .gob 分析文件并进行处理。
+// 程序会自动检测当前目录下的视频文件（.mp4、.mov 等）或 .pb.zst 分析文件并进行处理。
 package main
 
 import (
-	"compress/gzip"
-	"encoding/gob"
 	"encoding/xml"
 	"flag"
 	"fmt"
@@ -31,8 +29,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/schollz/progressbar/v3"
 	"gocv.io/x/gocv"
+	"google.golang.org/protobuf/proto"
 )
 
 // ---------------------------------------------------------
@@ -91,17 +91,6 @@ type DecodedFrame struct {
 	IsLastFrame bool     // 是否为最后一帧（用作哨兵值）
 }
 
-// AnalysisResult 保存视频分析的完整结果
-type AnalysisResult struct {
-	VideoFile          string   // 被分析的视频文件路径
-	FPS                float64  // 视频帧率
-	Width              int      // 视频宽度（像素）
-	Height             int      // 视频高度（像素）
-	TotalFrames        int      // 视频总帧数
-	SuggestedThreshold float64  // 自动计算的建议阈值
-	DiffCounts         []uint32 // 每一帧的差异像素数量
-}
-
 // StaticSegment 表示一个连续的静态片段
 type StaticSegment struct {
 	StartFrame     int // 起始帧号（从1开始）
@@ -147,26 +136,26 @@ func main() {
 // ---------------------------------------------------------
 
 // routeCommand 根据输入类型和参数决定执行路径
-// 支持三种模式：视频分析、gob统计查看、FCPXML生成
-func routeCommand(inputPath string, isGobInput bool, threshold, minDuration float64) error {
-	if isGobInput && threshold >= 0 {
-		return handleGobToFCPXML(inputPath, threshold, minDuration)
+// 支持三种模式：视频分析、pb统计查看、FCPXML生成
+func routeCommand(inputPath string, isPbInput bool, threshold, minDuration float64) error {
+	if isPbInput && threshold >= 0 {
+		return handlePbToFCPXML(inputPath, threshold, minDuration)
 	}
 
-	if isGobInput {
-		return handleGobAnalysis(inputPath)
+	if isPbInput {
+		return handlePbAnalysis(inputPath)
 	}
 
 	return handleVideoAnalysis(inputPath)
 }
 
-// detectInputFile 在当前目录搜索 gob 文件或视频文件
-// 优先查找 gob 文件，找不到则查找视频文件
-// 返回文件路径和是否为 gob 文件的标识
+// detectInputFile 在当前目录搜索 pb 文件或视频文件
+// 优先查找 pb 文件，找不到则查找视频文件
+// 返回文件路径和是否为 pb 文件的标识
 func detectInputFile() (string, bool) {
-	foundGob := findGobInCurrentDir()
-	if foundGob != "" {
-		return foundGob, true
+	foundPb := findPbInCurrentDir()
+	if foundPb != "" {
+		return foundPb, true
 	}
 
 	foundVideo := findVideoInCurrentDir()
@@ -179,11 +168,11 @@ func detectInputFile() (string, bool) {
 
 // printUsageAndExit 打印使用说明并退出程序
 func printUsageAndExit() {
-	fmt.Println("错误: 当前目录未找到 Gob 或视频文件")
+	fmt.Println("错误: 当前目录未找到 .pb.zst 或视频文件")
 	fmt.Println()
 	fmt.Println("用法:")
-	fmt.Println("  vcmp                                # 分析视频生成gob或显示gob统计")
-	fmt.Println("  vcmp <threshold>                    # 使用gob生成FCPXML (阈值)")
+	fmt.Println("  vcmp                                # 分析视频生成.pb.zst或显示统计")
+	fmt.Println("  vcmp <threshold>                    # 使用.pb.zst生成FCPXML (阈值)")
 	fmt.Println("  vcmp <threshold> <min_duration>     # 指定阈值和最小持续时间(秒)")
 	fmt.Println()
 	os.Exit(1)
@@ -193,7 +182,7 @@ func printUsageAndExit() {
 // 高层处理
 // ---------------------------------------------------------
 
-// handleVideoAnalysis 执行视频分析并将结果保存为 gob 文件
+// handleVideoAnalysis 执行视频分析并将结果保存为 pb.zst 文件
 // 这是首次处理视频时的入口点
 func handleVideoAnalysis(videoPath string) error {
 	fmt.Printf(">> 分析视频: %s\n", videoPath)
@@ -203,44 +192,37 @@ func handleVideoAnalysis(videoPath string) error {
 		return fmt.Errorf("分析视频失败: %w", err)
 	}
 
-	outputPath := generateGobFilename(videoPath)
-	if err := result.SaveToGob(outputPath); err != nil {
-		return fmt.Errorf("保存Gob文件失败 (%s): %w", outputPath, err)
+	outputPath := generatePbFilename(videoPath)
+	if err := saveAnalysisToProto(result, outputPath); err != nil {
+		return fmt.Errorf("保存文件失败 (%s): %w", outputPath, err)
 	}
 
 	printAnalysisResults(result)
 	return nil
 }
 
-// handleGobToFCPXML 从 gob 文件加载分析数据并生成 FCPXML 文件
+// handlePbToFCPXML 从 pb.zst 文件加载分析数据并生成 FCPXML 文件
 // 这是生成最终标记文件的入口点
-func handleGobToFCPXML(gobPath string, diffCountThreshold, minDurationSec float64) error {
-	fmt.Printf(">> 加载分析数据: %s\n", gobPath)
+func handlePbToFCPXML(pbPath string, diffCountThreshold, minDurationSec float64) error {
+	fmt.Printf(">> 加载分析数据: %s\n", pbPath)
 
-	result, err := loadAnalysisFromGob(gobPath)
+	result, err := loadAnalysisFromProto(pbPath)
 	if err != nil {
-		return fmt.Errorf("加载Gob文件失败 (%s): %w", gobPath, err)
+		return fmt.Errorf("加载文件失败 (%s): %w", pbPath, err)
 	}
 
-	segments := generateStaticSegments(result.DiffCounts, diffCountThreshold, minDurationSec, result.FPS)
+	segments := generateStaticSegments(result.DiffCounts, diffCountThreshold, minDurationSec, result.Fps)
 	if len(segments) == 0 {
 		return fmt.Errorf("未找到静态片段 (阈值: %.0f, 最小时长: %.0f秒)", diffCountThreshold, minDurationSec)
 	}
 
 	fmt.Printf("\n阈值 %.0f, 最小时长 %.0fs 的片段分布:\n", diffCountThreshold, minDurationSec)
-	printSegmentDurationDistribution(segments, result.FPS)
+	printSegmentDurationDistribution(segments, result.Fps)
 	fmt.Println()
 
 	outputPath := generateFCPXMLFilename(result.VideoFile, diffCountThreshold)
-	meta := AnalysisResult{
-		VideoFile:   result.VideoFile,
-		FPS:         result.FPS,
-		Width:       result.Width,
-		Height:      result.Height,
-		TotalFrames: result.TotalFrames,
-	}
-
-	if err := generateFCPXML(segments, meta, outputPath); err != nil {
+	
+	if err := generateFCPXML(segments, result, outputPath); err != nil {
 		return fmt.Errorf("生成FCPXML文件失败 (%s): %w", outputPath, err)
 	}
 
@@ -250,14 +232,14 @@ func handleGobToFCPXML(gobPath string, diffCountThreshold, minDurationSec float6
 	return nil
 }
 
-// handleGobAnalysis 从 gob 文件加载并显示分析统计结果
+// handlePbAnalysis 从 pb.zst 文件加载并显示分析统计结果
 // 用于查看已分析视频的统计信息，无需重新分析
-func handleGobAnalysis(gobPath string) error {
-	fmt.Printf(">> 加载分析数据: %s\n", gobPath)
+func handlePbAnalysis(pbPath string) error {
+	fmt.Printf(">> 加载分析数据: %s\n", pbPath)
 
-	result, err := loadAnalysisFromGob(gobPath)
+	result, err := loadAnalysisFromProto(pbPath)
 	if err != nil {
-		return fmt.Errorf("加载Gob文件失败 (%s): %w", gobPath, err)
+		return fmt.Errorf("加载文件失败 (%s): %w", pbPath, err)
 	}
 
 	printAnalysisResults(result)
@@ -271,10 +253,10 @@ func handleGobAnalysis(gobPath string) error {
 // printAnalysisResults 显示分析结果，包括建议阈值和片段时长分布
 func printAnalysisResults(result *AnalysisResult) {
 	threshold := result.SuggestedThreshold
-	segments := generateStaticSegments(result.DiffCounts, threshold, 0.0, result.FPS)
+	segments := generateStaticSegments(result.DiffCounts, threshold, 0.0, result.Fps)
 
 	fmt.Printf("\n阈值为 %.0f 时的连续静止区间分布:\n", threshold)
-	printSegmentDurationDistribution(segments, result.FPS)
+	printSegmentDurationDistribution(segments, result.Fps)
 }
 
 // calculateSuggestedThreshold 基于百分位数和系数计算建议阈值
@@ -301,7 +283,7 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 	}()
 
 	metadata := extractVideoMetadata(video, videoPath)
-	cropHeight := calculateCropHeight(metadata.Height)
+	cropHeight := calculateCropHeight(int(metadata.Height))
 
 	matPool := createMatPool(ProducerWorkingMat + FrameBufferSize + ConsumerWorkingMat)
 	defer func() {
@@ -311,32 +293,26 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 	frameChan := make(chan DecodedFrame, FrameBufferSize)
 	go frameProducer(video, frameChan, matPool)
 
-	diffCounts, err := processFrames(frameChan, matPool, metadata.Width, cropHeight, metadata.TotalFrames)
+	diffCounts, err := processFrames(frameChan, matPool, int(metadata.Width), cropHeight, int(metadata.TotalFrames))
 	if err != nil {
 		return nil, fmt.Errorf("处理帧失败: %w", err)
 	}
 
 	suggestedThreshold := calculateSuggestedThreshold(diffCounts)
+	metadata.DiffCounts = diffCounts
+	metadata.SuggestedThreshold = suggestedThreshold
 
-	return &AnalysisResult{
-		VideoFile:          videoPath,
-		FPS:                metadata.FPS,
-		Width:              metadata.Width,
-		Height:             metadata.Height,
-		TotalFrames:        metadata.TotalFrames,
-		DiffCounts:         diffCounts,
-		SuggestedThreshold: suggestedThreshold,
-	}, nil
+	return metadata, nil
 }
 
 // extractVideoMetadata 从已打开的视频对象中提取元数据
-func extractVideoMetadata(video *gocv.VideoCapture, filePath string) AnalysisResult {
-	return AnalysisResult{
+func extractVideoMetadata(video *gocv.VideoCapture, filePath string) *AnalysisResult {
+	return &AnalysisResult{
 		VideoFile:   filePath,
-		FPS:         video.Get(gocv.VideoCaptureFPS),
-		Width:       int(video.Get(gocv.VideoCaptureFrameWidth)),
-		Height:      int(video.Get(gocv.VideoCaptureFrameHeight)),
-		TotalFrames: int(video.Get(gocv.VideoCaptureFrameCount)),
+		Fps:         video.Get(gocv.VideoCaptureFPS),
+		Width:       int32(video.Get(gocv.VideoCaptureFrameWidth)),
+		Height:      int32(video.Get(gocv.VideoCaptureFrameHeight)),
+		TotalFrames: int32(video.Get(gocv.VideoCaptureFrameCount)),
 	}
 }
 
@@ -561,19 +537,19 @@ func createSegmentIfValid(startFrame, endFrame int, fps, minDurationSec float64)
 // generateFCPXML 根据检测到的静态片段生成 FCPXML 标记文件
 // FCPXML 是 Final Cut Pro X 的项目文件格式
 // 生成的文件包含在时间线上标记静态片段起止点的 marker
-func generateFCPXML(segments []StaticSegment, meta AnalysisResult, outputPath string) error {
+func generateFCPXML(segments []StaticSegment, meta *AnalysisResult, outputPath string) error {
 	formatID := "r1"
-	frameDuration := getFrameDuration(meta.FPS)
-	totalDuration := frameToRationalTime(meta.TotalFrames, meta.FPS)
+	frameDuration := getFrameDuration(meta.Fps)
+	totalDuration := frameToRationalTime(int(meta.TotalFrames), meta.Fps)
 
-	markers := createMarkers(segments, meta.FPS)
+	markers := createMarkers(segments, meta.Fps)
 
 	fcpxml := FCPXML{
 		Version: "1.11",
 		Resources: Resources{
 			Format: Format{
 				ID:         formatID,
-				Name:       fmt.Sprintf("%dx%d %gp", meta.Width, meta.Height, meta.FPS),
+				Name:       fmt.Sprintf("%dx%d %gp", meta.Width, meta.Height, meta.Fps),
 				FrameDur:   frameDuration,
 				Width:      fmt.Sprintf("%d", meta.Width),
 				Height:     fmt.Sprintf("%d", meta.Height),
@@ -669,13 +645,13 @@ func writeFCPXMLFile(outputPath string, fcpxml FCPXML) error {
 // 文件命名
 // ---------------------------------------------------------
 
-// generateGobFilename 根据视频文件名生成 gob 文件名
-// 例如：video.mp4 -> video.gob
-func generateGobFilename(videoPath string) string {
+// generatePbFilename 根据视频文件名生成 pb.zst 文件名
+// 例如：video.mp4 -> video.pb.zst
+func generatePbFilename(videoPath string) string {
 	baseName := filepath.Base(videoPath)
 	ext := filepath.Ext(baseName)
 	nameWithoutExt := strings.TrimSuffix(baseName, ext)
-	return fmt.Sprintf("%s.gob", nameWithoutExt)
+	return fmt.Sprintf("%s.pb.zst", nameWithoutExt)
 }
 
 // generateFCPXMLFilename 根据视频文件名和阈值生成 FCPXML 文件名
@@ -691,9 +667,15 @@ func generateFCPXMLFilename(videoPath string, threshold float64) string {
 // 数据持久化
 // ---------------------------------------------------------
 
-// SaveToGob 将分析结果序列化并保存为 gzip 压缩的 gob 文件
-// gob 是 Go 的二进制序列化格式，gzip 压缩可减小文件体积
-func (r *AnalysisResult) SaveToGob(outputPath string) error {
+// saveAnalysisToProto 将分析结果序列化并保存为 Zstd 压缩的 protobuf 文件
+func saveAnalysisToProto(result *AnalysisResult, outputPath string) error {
+	// 序列化为 protobuf
+	data, err := proto.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("protobuf 序列化失败: %w", err)
+	}
+
+	// 创建输出文件
 	file, err := os.Create(outputPath)
 	if err != nil {
 		return err
@@ -702,37 +684,48 @@ func (r *AnalysisResult) SaveToGob(outputPath string) error {
 		_ = file.Close()
 	}()
 
-	gw := gzip.NewWriter(file)
-
-	encoder := gob.NewEncoder(gw)
-	if err := encoder.Encode(r); err != nil {
-		_ = gw.Close()
-		return err
-	}
-
-	return gw.Close()
-}
-
-// loadAnalysisFromGob 从 gzip 压缩的 gob 文件加载分析结果
-func loadAnalysisFromGob(filePath string) (*AnalysisResult, error) {
-	file, err := os.Open(filePath)
+	// 创建 zstd 压缩器
+	encoder, err := zstd.NewWriter(file)
 	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = file.Close() }()
-
-	gr, err := gzip.NewReader(file)
-	if err != nil {
-		return nil, fmt.Errorf("gzip 读取失败: %w", err)
+		return fmt.Errorf("创建 zstd 编码器失败: %w", err)
 	}
 	defer func() {
-		_ = gr.Close()
+		_ = encoder.Close()
 	}()
 
-	var result AnalysisResult
-	decoder := gob.NewDecoder(gr)
-	if err := decoder.Decode(&result); err != nil {
+	// 写入压缩数据
+	if _, err := encoder.Write(data); err != nil {
+		return fmt.Errorf("写入压缩数据失败: %w", err)
+	}
+
+	return encoder.Close()
+}
+
+// loadAnalysisFromProto 从 Zstd 压缩的 protobuf 文件加载分析结果
+func loadAnalysisFromProto(filePath string) (*AnalysisResult, error) {
+	// 读取文件内容
+	data, err := os.ReadFile(filePath)
+	if err != nil {
 		return nil, err
+	}
+
+	// 创建 zstd 解压器
+	decoder, err := zstd.NewReader(nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建 zstd 解码器失败: %w", err)
+	}
+	defer decoder.Close()
+
+	// 解压数据
+	decompressed, err := decoder.DecodeAll(data, nil)
+	if err != nil {
+		return nil, fmt.Errorf("zstd 解压失败: %w", err)
+	}
+
+	// 反序列化 protobuf
+	var result AnalysisResult
+	if err := proto.Unmarshal(decompressed, &result); err != nil {
+		return nil, fmt.Errorf("protobuf 反序列化失败: %w", err)
 	}
 
 	return &result, nil
@@ -907,9 +900,9 @@ func findVideoInCurrentDir() string {
 	return findFileWithExtensions([]string{".mp4", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".m4v", ".mpg", ".mpeg"})
 }
 
-// findGobInCurrentDir 在当前目录查找 .gob 分析数据文件
-func findGobInCurrentDir() string {
-	return findFileWithExtensions([]string{".gob"})
+// findPbInCurrentDir 在当前目录查找 .pb.zst 分析数据文件
+func findPbInCurrentDir() string {
+	return findFileWithExtensions([]string{".pb.zst"})
 }
 
 // ---------------------------------------------------------
