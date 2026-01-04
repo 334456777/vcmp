@@ -29,10 +29,12 @@ import (
 	"strings"
 	"time"
 
+	"vcmp/proto"
+
 	"github.com/klauspost/compress/zstd"
 	"github.com/schollz/progressbar/v3"
 	"gocv.io/x/gocv"
-	"google.golang.org/protobuf/proto"
+	pb "google.golang.org/protobuf/proto"
 )
 
 // ---------------------------------------------------------
@@ -250,7 +252,7 @@ func handlePbAnalysis(pbPath string) error {
 // ---------------------------------------------------------
 
 // printAnalysisResults 显示分析结果，包括建议阈值和片段时长分布
-func printAnalysisResults(result *AnalysisResult) {
+func printAnalysisResults(result *proto.AnalysisResult) {
 	threshold := result.SuggestedThreshold
 	segments := generateStaticSegments(result.DiffCounts, threshold, 0.0, result.Fps)
 
@@ -272,7 +274,7 @@ func calculateSuggestedThreshold(diffCounts []uint32) float64 {
 // analyzeVideo 对视频进行逐帧分析，检测画面运动
 // 使用帧差法：比较相邻帧的灰度图差异，统计变化像素数量
 // 返回包含每帧差异计数的分析结果
-func analyzeVideo(videoPath string) (*AnalysisResult, error) {
+func analyzeVideo(videoPath string) (*proto.AnalysisResult, error) {
 	video, err := gocv.VideoCaptureFileWithAPI(videoPath, gocv.VideoCaptureAVFoundation)
 	if err != nil {
 		return nil, fmt.Errorf("打开视频失败: %w", err)
@@ -305,8 +307,8 @@ func analyzeVideo(videoPath string) (*AnalysisResult, error) {
 }
 
 // extractVideoMetadata 从已打开的视频对象中提取元数据
-func extractVideoMetadata(video *gocv.VideoCapture, filePath string) *AnalysisResult {
-	return &AnalysisResult{
+func extractVideoMetadata(video *gocv.VideoCapture, filePath string) *proto.AnalysisResult {
+	return &proto.AnalysisResult{
 		VideoFile:   filePath,
 		Fps:         video.Get(gocv.VideoCaptureFPS),
 		Width:       int32(video.Get(gocv.VideoCaptureFrameWidth)),
@@ -536,7 +538,7 @@ func createSegmentIfValid(startFrame, endFrame int, fps, minDurationSec float64)
 // generateFCPXML 根据检测到的静态片段生成 FCPXML 标记文件
 // FCPXML 是 Final Cut Pro X 的项目文件格式
 // 生成的文件包含在时间线上标记静态片段起止点的 marker
-func generateFCPXML(segments []StaticSegment, meta *AnalysisResult, outputPath string) error {
+func generateFCPXML(segments []StaticSegment, meta *proto.AnalysisResult, outputPath string) error {
 	formatID := "r1"
 	frameDuration := getFrameDuration(meta.Fps)
 	totalDuration := frameToRationalTime(int(meta.TotalFrames), meta.Fps)
@@ -667,9 +669,9 @@ func generateFCPXMLFilename(videoPath string, threshold float64) string {
 // ---------------------------------------------------------
 
 // saveAnalysisToProto 将分析结果序列化并保存为 Zstd 压缩的 protobuf 文件
-func saveAnalysisToProto(result *AnalysisResult, outputPath string) error {
+func saveAnalysisToProto(result *proto.AnalysisResult, outputPath string) error {
 	// 序列化为 protobuf
-	data, err := proto.Marshal(result)
+	data, err := pb.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("protobuf 序列化失败: %w", err)
 	}
@@ -701,7 +703,7 @@ func saveAnalysisToProto(result *AnalysisResult, outputPath string) error {
 }
 
 // loadAnalysisFromProto 从 Zstd 压缩的 protobuf 文件加载分析结果
-func loadAnalysisFromProto(filePath string) (*AnalysisResult, error) {
+func loadAnalysisFromProto(filePath string) (*proto.AnalysisResult, error) {
 	// 读取文件内容
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -722,8 +724,8 @@ func loadAnalysisFromProto(filePath string) (*AnalysisResult, error) {
 	}
 
 	// 反序列化 protobuf
-	var result AnalysisResult
-	if err := proto.Unmarshal(decompressed, &result); err != nil {
+	var result proto.AnalysisResult
+	if err := pb.Unmarshal(decompressed, &result); err != nil {
 		return nil, fmt.Errorf("protobuf 反序列化失败: %w", err)
 	}
 

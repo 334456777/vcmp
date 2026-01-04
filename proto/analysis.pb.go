@@ -2,17 +2,16 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v6.33.2
-// source: analysis.proto
+// source: proto/analysis.proto
 
-package main
+package proto
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -45,7 +44,7 @@ type AnalysisResult struct {
 
 func (x *AnalysisResult) Reset() {
 	*x = AnalysisResult{}
-	mi := &file_analysis_proto_msgTypes[0]
+	mi := &file_proto_analysis_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -57,7 +56,7 @@ func (x *AnalysisResult) String() string {
 func (*AnalysisResult) ProtoMessage() {}
 
 func (x *AnalysisResult) ProtoReflect() protoreflect.Message {
-	mi := &file_analysis_proto_msgTypes[0]
+	mi := &file_proto_analysis_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -70,7 +69,7 @@ func (x *AnalysisResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnalysisResult.ProtoReflect.Descriptor instead.
 func (*AnalysisResult) Descriptor() ([]byte, []int) {
-	return file_analysis_proto_rawDescGZIP(), []int{0}
+	return file_proto_analysis_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *AnalysisResult) GetVideoFile() string {
@@ -122,11 +121,11 @@ func (x *AnalysisResult) GetDiffCounts() []uint32 {
 	return nil
 }
 
-var File_analysis_proto protoreflect.FileDescriptor
+var File_proto_analysis_proto protoreflect.FileDescriptor
 
-const file_analysis_proto_rawDesc = "" +
+const file_proto_analysis_proto_rawDesc = "" +
 	"\n" +
-	"\x0eanalysis.proto\x12\x04main\"\xe4\x01\n" +
+	"\x14proto/analysis.proto\x12\x04vcmp\"\xe4\x01\n" +
 	"\x0eAnalysisResult\x12\x1d\n" +
 	"\n" +
 	"video_file\x18\x01 \x01(\tR\tvideoFile\x12\x10\n" +
@@ -136,25 +135,26 @@ const file_analysis_proto_rawDesc = "" +
 	"\ftotal_frames\x18\x05 \x01(\x05R\vtotalFrames\x12/\n" +
 	"\x13suggested_threshold\x18\x06 \x01(\x01R\x12suggestedThreshold\x12\x1f\n" +
 	"\vdiff_counts\x18\a \x03(\rR\n" +
-	"diffCountsB\tZ\a./;mainb\x06proto3"
+	"diffCountsB\fZ\n" +
+	"vcmp/protob\x06proto3"
 
 var (
-	file_analysis_proto_rawDescOnce sync.Once
-	file_analysis_proto_rawDescData []byte
+	file_proto_analysis_proto_rawDescOnce sync.Once
+	file_proto_analysis_proto_rawDescData []byte
 )
 
-func file_analysis_proto_rawDescGZIP() []byte {
-	file_analysis_proto_rawDescOnce.Do(func() {
-		file_analysis_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_analysis_proto_rawDesc), len(file_analysis_proto_rawDesc)))
+func file_proto_analysis_proto_rawDescGZIP() []byte {
+	file_proto_analysis_proto_rawDescOnce.Do(func() {
+		file_proto_analysis_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_analysis_proto_rawDesc), len(file_proto_analysis_proto_rawDesc)))
 	})
-	return file_analysis_proto_rawDescData
+	return file_proto_analysis_proto_rawDescData
 }
 
-var file_analysis_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
-var file_analysis_proto_goTypes = []any{
-	(*AnalysisResult)(nil), // 0: main.AnalysisResult
+var file_proto_analysis_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_proto_analysis_proto_goTypes = []any{
+	(*AnalysisResult)(nil), // 0: vcmp.AnalysisResult
 }
-var file_analysis_proto_depIdxs = []int32{
+var file_proto_analysis_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
 	0, // [0:0] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
@@ -162,26 +162,26 @@ var file_analysis_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_analysis_proto_init() }
-func file_analysis_proto_init() {
-	if File_analysis_proto != nil {
+func init() { file_proto_analysis_proto_init() }
+func file_proto_analysis_proto_init() {
+	if File_proto_analysis_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_analysis_proto_rawDesc), len(file_analysis_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_analysis_proto_rawDesc), len(file_proto_analysis_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_analysis_proto_goTypes,
-		DependencyIndexes: file_analysis_proto_depIdxs,
-		MessageInfos:      file_analysis_proto_msgTypes,
+		GoTypes:           file_proto_analysis_proto_goTypes,
+		DependencyIndexes: file_proto_analysis_proto_depIdxs,
+		MessageInfos:      file_proto_analysis_proto_msgTypes,
 	}.Build()
-	File_analysis_proto = out.File
-	file_analysis_proto_goTypes = nil
-	file_analysis_proto_depIdxs = nil
+	File_proto_analysis_proto = out.File
+	file_proto_analysis_proto_goTypes = nil
+	file_proto_analysis_proto_depIdxs = nil
 }

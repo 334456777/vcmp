@@ -18,7 +18,7 @@ all: build
 proto:
 	@echo ">> 生成 protobuf 代码..."
 	@export PATH=$$PATH:$(shell go env GOPATH)/bin && \
-	$(PROTOC) --go_out=. --go_opt=paths=source_relative analysis.proto
+	$(PROTOC) --go_out=. --go_opt=paths=source_relative proto/analysis.proto
 	@echo "✓ protobuf 代码生成完成"
 
 # 构建二进制文件

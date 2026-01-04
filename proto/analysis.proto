@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package main;
+package vcmp;
 
-option go_package = "./;main";
+option go_package = "vcmp/proto";
 
 // AnalysisResult 保存视频分析的完整结果
 message AnalysisResult {
