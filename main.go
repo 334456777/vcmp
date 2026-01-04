@@ -221,7 +221,7 @@ func handlePbToFCPXML(pbPath string, diffCountThreshold, minDurationSec float64)
 	fmt.Println()
 
 	outputPath := generateFCPXMLFilename(result.VideoFile, diffCountThreshold)
-	
+
 	if err := generateFCPXML(segments, result, outputPath); err != nil {
 		return fmt.Errorf("生成FCPXML文件失败 (%s): %w", outputPath, err)
 	}
@@ -233,7 +233,6 @@ func handlePbToFCPXML(pbPath string, diffCountThreshold, minDurationSec float64)
 }
 
 // handlePbAnalysis 从 pb.zst 文件加载并显示分析统计结果
-// 用于查看已分析视频的统计信息，无需重新分析
 func handlePbAnalysis(pbPath string) error {
 	fmt.Printf(">> 加载分析数据: %s\n", pbPath)
 
