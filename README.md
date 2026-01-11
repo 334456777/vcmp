@@ -184,8 +184,3 @@ make help       # 显示帮助信息
 ## 许可证
 
 GPL-3.0
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
