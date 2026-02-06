@@ -292,9 +292,9 @@ func analyzeVideo(videoPath string) (*proto.AnalysisResult, error) {
 	}()
 
 	frameChan := make(chan DecodedFrame, FrameBufferSize)
-	go frameProducer(video, frameChan, matPool)
+	go frameProducer(video, frameChan, matPool, int(metadata.Width), cropHeight)
 
-	diffCounts, err := processFrames(frameChan, matPool, int(metadata.Width), cropHeight, int(metadata.TotalFrames))
+	diffCounts, err := processFrames(frameChan, matPool, int(metadata.TotalFrames))
 	if err != nil {
 		return nil, fmt.Errorf("处理帧失败: %w", err)
 	}
@@ -348,14 +348,14 @@ func closeMatPool(pool chan gocv.Mat) {
 }
 
 // processFrames 处理解码后的帧序列，计算每帧的差异像素数
-
+//
 // 核心算法：
-//  1. 将当前帧转为灰度图
+//  1. 将当前帧转为灰度图（帧已由生产者裁剪好）
 //  2. 与前一帧做绝对差值
 //  3. 二值化处理（阈值25）
 //  4. 形态学腐蚀去噪
 //  5. 统计非零像素数
-func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, cropHeight, totalFrames int) ([]uint32, error) {
+func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, totalFrames int) ([]uint32, error) {
 	diffCounts := make([]uint32, 0, totalFrames)
 
 	currentGray, prevGray, workBuffer := gocv.NewMat(), gocv.NewMat(), gocv.NewMat()
@@ -378,12 +378,10 @@ func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, 
 		img := decodedFrame.Frame
 		frameNum := decodedFrame.FrameNum
 
-		currentBgr := img.Region(image.Rect(0, 0, width, cropHeight))
-		if err := gocv.CvtColor(currentBgr, &currentGray, gocv.ColorBGRToGray); err != nil {
-			_ = currentBgr.Close()
+		// 帧已由生产者裁剪好，直接转灰度
+		if err := gocv.CvtColor(img, &currentGray, gocv.ColorBGRToGray); err != nil {
 			return nil, fmt.Errorf("frame %d CvtColor failed: %w", frameNum, err)
 		}
-		_ = currentBgr.Close()
 
 		if !prevGray.Empty() {
 			if err := gocv.AbsDiff(currentGray, prevGray, &workBuffer); err != nil {
@@ -417,9 +415,9 @@ func processFrames(frameChan <-chan DecodedFrame, matPool chan gocv.Mat, width, 
 }
 
 // frameProducer 在独立 goroutine 中读取视频帧
-// 从视频中解码帧并通过 channel 发送给处理函数
-// 尝试从对象池获取 Mat，池满时创建新对象
-func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matBuffer chan gocv.Mat) {
+// 从视频中解码帧，裁剪底部区域后通过 channel 发送给处理函数
+// 裁剪操作在生产者阶段完成，减少消费者端的内存分配
+func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matBuffer chan gocv.Mat, width, cropHeight int) {
 	defer func() {
 		close(frameChan)
 	}()
@@ -432,34 +430,48 @@ func frameProducer(video *gocv.VideoCapture, frameChan chan<- DecodedFrame, matB
 	frameNum := 0
 
 	for {
-		var matToSend gocv.Mat
+		var fullFrame gocv.Mat
 		fromPool := false
 
 		select {
 		case m := <-matBuffer:
-			matToSend = m
+			fullFrame = m
 			fromPool = true
 		default:
-			matToSend = gocv.NewMat()
+			fullFrame = gocv.NewMat()
 		}
 
-		if ok := video.Read(&matToSend); !ok || matToSend.Empty() {
+		if ok := video.Read(&fullFrame); !ok || fullFrame.Empty() {
 			if fromPool {
 				select {
-				case matBuffer <- matToSend:
+				case matBuffer <- fullFrame:
 				default:
-					_ = matToSend.Close()
+					_ = fullFrame.Close()
 				}
 			} else {
-				_ = matToSend.Close()
+				_ = fullFrame.Close()
 			}
 			break
 		}
 
 		frameNum++
 
+		// 裁剪底部区域（排除字幕），减少后续处理的数据量
+		cropped := fullFrame.Region(image.Rect(0, 0, width, cropHeight))
+
+		// 原始帧已处理完毕，归还到池或关闭
+		if fromPool {
+			select {
+			case matBuffer <- fullFrame:
+			default:
+				_ = fullFrame.Close()
+			}
+		} else {
+			_ = fullFrame.Close()
+		}
+
 		frameChan <- DecodedFrame{
-			Frame:       matToSend,
+			Frame:       cropped,
 			FrameNum:    frameNum,
 			IsLastFrame: false,
 		}
