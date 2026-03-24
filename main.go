@@ -1,19 +1,21 @@
-// vcmp 是一个视频静态场景检测工具。
-// 通过逐帧分析视频内容，自动检测出画面静止的片段，并生成 FCPXML 标记文件供 Final Cut Pro X 使用。
+// vcmp is a video static scene detection tool.
+// Automatically detects static frame segments in videos through frame-by-frame analysis,
+// and generates FCPXML marker files for use with Final Cut Pro X.
 //
-// 工作流程：
+// Workflow:
 //
-//  1. 首次运行：分析视频文件，生成 .pb.zst 分析数据文件
-//  2. 查看统计：直接运行查看已有 .pb.zst 文件的分析结果
-//  3. 导出标记：指定阈值生成 FCPXML 文件
+//  1. First run: Analyze video file, generate .pb.zst analysis data file
+//  2. View statistics: Run directly to view analysis results from existing .pb.zst file
+//  3. Export markers: Specify threshold to generate FCPXML file
 //
-// 使用方法：
+// Usage:
 //
-//	vcmp                                # 分析视频生成.pb.zst或显示统计
-//	vcmp <threshold>                    # 使用.pb.zst生成FCPXML (阈值)
-//	vcmp <threshold> <min_duration>     # 指定阈值和最小持续时间(秒)
+//	vcmp                                # Analyze video to generate .pb.zst or display statistics
+//	vcmp <threshold>                    # Use .pb.zst to generate FCPXML (threshold)
+//	vcmp <threshold> <min_duration>     # Specify threshold and minimum duration (seconds)
 //
-// 程序会自动检测当前目录下的视频文件（.mp4、.mov 等）或 .pb.zst 分析文件并进行处理。
+// The program automatically detects video files (.mp4, .mov, etc.) or .pb.zst analysis files
+// in the current directory and processes them.
 package main
 
 import (
@@ -38,43 +40,43 @@ import (
 )
 
 // ---------------------------------------------------------
-// 常量定义
+// Constants Definition
 // ---------------------------------------------------------
 
 const (
-	// MarkerStartPrefix 是 FCPXML 中起始标记的前缀
+	// MarkerStartPrefix is the prefix for start markers in FCPXML
 	MarkerStartPrefix = "start"
 
-	// MarkerStopPrefix 是 FCPXML 中结束标记的前缀
+	// MarkerStopPrefix is the prefix for stop markers in FCPXML
 	MarkerStopPrefix = "stop"
 
-	// CropIgnoreNumerator 定义裁剪掉画面底部的分子
+	// CropIgnoreNumerator defines the numerator for cropping the bottom of the frame
 	CropIgnoreNumerator = 65
 
-	// CropIgnoreDenominator 定义裁剪掉画面底部的分母
-	// 用于排除硬编码字幕或水印区域，避免干扰静态检测
+	// CropIgnoreDenominator defines the denominator for cropping the bottom of the frame
+	// Used to exclude hardcoded subtitle or watermark regions to avoid interfering with static detection
 	CropIgnoreDenominator = 1080
 
-	// ProgressBarWidth 定义进度条的字符宽度
+	// ProgressBarWidth defines the character width of the progress bar
 	ProgressBarWidth = 30
 
-	// DefaultMinDurationSec 是判定为静态片段的默认最小持续时间（秒）
+	// DefaultMinDurationSec is the default minimum duration (seconds) to be judged as a static segment
 	DefaultMinDurationSec = 20.0
 
-	// BinaryThreshold 是帧差二值化的阈值
-	// 像素差异超过此值才被认为是运动
+	// BinaryThreshold is the threshold for frame difference binarization
+	// Pixel differences exceeding this value are considered motion
 	BinaryThreshold = 25
 
-	// FrameBufferSize 定义帧缓冲区的大小
+	// FrameBufferSize defines the size of the frame buffer
 	FrameBufferSize = 5
 
-	// ProducerWorkingMat 正在读取的一帧
+	// ProducerWorkingMat is the currently being read frame
 	ProducerWorkingMat = 1
 
-	//ConsumerWorkingMat 保留的前一帧
+	//ConsumerWorkingMat is the retained previous frame
 	ConsumerWorkingMat = 1
 
-	// percentile 定义用于计算建议阈值的百分位数
+	// percentile defines the percentile used to calculate the suggested threshold
 	percentile = 95.0
 
 	// DefaultThresholdFactor 是百分位值的倍数系数
